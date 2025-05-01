@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { RefreshCcw, VideoOff, MicOff, Maximize2 } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import { supabase } from '@/integrations/supabase/client';
+import { useAuth } from '@/hooks/useAuth';
 
 const VideoChat: React.FC = () => {
   const [isSearching, setIsSearching] = useState(true);
@@ -17,6 +18,7 @@ const VideoChat: React.FC = () => {
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [peerConnection, setPeerConnection] = useState<RTCPeerConnection | null>(null);
   const [currentChannel, setCurrentChannel] = useState<any>(null);
+  const [connectionAttempts, setConnectionAttempts] = useState(0);
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
@@ -24,6 +26,7 @@ const VideoChat: React.FC = () => {
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { user } = useAuth();
 
   const animateCoin = () => {
     setShowCoin(true);
@@ -56,14 +59,15 @@ const VideoChat: React.FC = () => {
   const RTCconfig = {
     iceServers: [
       { urls: "stun:stun.l.google.com:19302" },
+      { urls: "stun:stun1.l.google.com:19302" },
+      { urls: "stun:stun2.l.google.com:19302" },
     ]
   };
 
   // Обработка присутствия пользователей
   useEffect(() => {
     const checkSession = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) {
+      if (!user) {
         navigate('/');
         toast({
           title: "Требуется авторизация",
@@ -72,10 +76,12 @@ const VideoChat: React.FC = () => {
         });
         return;
       }
-      setCurrentUserId(session.user.id);
+      
+      setCurrentUserId(user.id);
+      console.log("Current user ID:", user.id);
       
       // Настройка присутствия
-      setupPresence(session.user.id);
+      setupPresence(user.id);
     };
     
     checkSession();
@@ -92,9 +98,11 @@ const VideoChat: React.FC = () => {
         localStreamRef.current.getTracks().forEach(track => track.stop());
       }
     };
-  }, []);
+  }, [user]);
   
   const setupPresence = (userId: string) => {
+    console.log("Setting up presence for user:", userId);
+    
     // Создаем канал присутствия
     const channel = supabase.channel('online-users', {
       config: {
@@ -108,30 +116,36 @@ const VideoChat: React.FC = () => {
       .on('presence', { event: 'sync' }, () => {
         const state = channel.presenceState();
         const userIds = Object.keys(state);
+        console.log("Presence sync - Online users:", userIds);
         setOnlineUsers(userIds);
         
         // Если есть только 2 пользователя онлайн, устанавливаем соединение
         if (userIds.length === 2 && userIds.includes(userId) && !isConnected) {
           const otherUserId = userIds.find(id => id !== userId);
           if (otherUserId) {
+            console.log("Two users online, initiating call between", userId, "and", otherUserId);
             initiateCall(userId < otherUserId);
           }
         } else if (userIds.length < 2 && isConnected) {
+          console.log("Less than 2 users online, disconnecting");
           handleDisconnect();
         }
       })
       .on('presence', { event: 'join' }, ({ key }) => {
+        console.log("User joined:", key);
         toast({
           title: "Пользователь онлайн",
           description: `ID: ${key.substring(0, 8)}...`,
         });
       })
-      .on('presence', { event: 'leave' }, () => {
+      .on('presence', { event: 'leave' }, ({ key }) => {
+        console.log("User left:", key);
         if (isConnected) {
           handleDisconnect();
         }
       })
       .subscribe(async (status) => {
+        console.log("Presence channel status:", status);
         if (status === 'SUBSCRIBED') {
           await channel.track({ online_at: new Date().toISOString() });
         }
@@ -144,6 +158,7 @@ const VideoChat: React.FC = () => {
       'broadcast',
       { event: 'offer' },
       async ({ payload }) => {
+        console.log("Received offer:", payload);
         if (payload.target === userId) {
           handleOffer(payload.offer, payload.from);
         }
@@ -152,6 +167,7 @@ const VideoChat: React.FC = () => {
       'broadcast',
       { event: 'answer' },
       async ({ payload }) => {
+        console.log("Received answer:", payload);
         if (payload.target === userId) {
           handleAnswer(payload.answer);
         }
@@ -160,11 +176,14 @@ const VideoChat: React.FC = () => {
       'broadcast',
       { event: 'ice-candidate' },
       async ({ payload }) => {
+        console.log("Received ICE candidate:", payload);
         if (payload.target === userId) {
           handleIceCandidate(payload.candidate);
         }
       }
-    ).subscribe();
+    ).subscribe((status) => {
+      console.log("Signal channel status:", status);
+    });
     
     setCurrentChannel(signalChannel);
     
@@ -174,6 +193,7 @@ const VideoChat: React.FC = () => {
   
   const setupMediaDevices = async () => {
     try {
+      console.log("Setting up media devices");
       const stream = await navigator.mediaDevices.getUserMedia({ 
         video: true, 
         audio: true 
@@ -183,6 +203,7 @@ const VideoChat: React.FC = () => {
       
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = stream;
+        console.log("Local video stream set up successfully");
       }
       
     } catch (error) {
@@ -196,7 +217,12 @@ const VideoChat: React.FC = () => {
   };
   
   const initiateCall = async (isInitiator: boolean) => {
-    if (!localStreamRef.current) return;
+    if (!localStreamRef.current) {
+      console.error("No local stream available");
+      return;
+    }
+    
+    console.log(`Initiating call as ${isInitiator ? 'initiator' : 'receiver'}`);
     
     // Создаем новое RTC соединение
     const pc = new RTCPeerConnection(RTCconfig);
@@ -204,12 +230,17 @@ const VideoChat: React.FC = () => {
     
     // Добавляем локальное видео в соединение
     localStreamRef.current.getTracks().forEach(track => {
-      pc.addTrack(track, localStreamRef.current!);
+      if (localStreamRef.current) {
+        console.log(`Adding track to peer connection: ${track.kind}`);
+        pc.addTrack(track, localStreamRef.current);
+      }
     });
     
     // Обрабатываем получение медиапотока от удаленного пользователя
     pc.ontrack = (event) => {
+      console.log("Received remote track:", event);
       if (remoteVideoRef.current && event.streams[0]) {
+        console.log("Setting remote video stream");
         remoteVideoRef.current.srcObject = event.streams[0];
         setIsSearching(false);
         setIsConnected(true);
@@ -225,8 +256,10 @@ const VideoChat: React.FC = () => {
     // Обработка ICE кандидатов
     pc.onicecandidate = (event) => {
       if (event.candidate) {
+        console.log("Generated ICE candidate:", event.candidate);
         const otherUserId = onlineUsers.find(id => id !== currentUserId);
-        if (otherUserId) {
+        if (otherUserId && currentChannel) {
+          console.log("Sending ICE candidate to:", otherUserId);
           currentChannel.send({
             type: 'broadcast',
             event: 'ice-candidate',
@@ -239,15 +272,41 @@ const VideoChat: React.FC = () => {
         }
       }
     };
+
+    // Log connection state changes
+    pc.oniceconnectionstatechange = () => {
+      console.log("ICE connection state changed to:", pc.iceConnectionState);
+      if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
+        if (connectionAttempts < 3) {
+          console.log(`Connection attempt ${connectionAttempts + 1} failed, retrying...`);
+          setConnectionAttempts(prev => prev + 1);
+          // Reset connection and try again
+          pc.close();
+          setTimeout(() => {
+            initiateCall(isInitiator);
+          }, 1000);
+        } else {
+          console.log("Max connection attempts reached, giving up");
+          handleDisconnect();
+          toast({
+            title: "Не удалось установить соединение",
+            description: "Попробуйте обновить страницу или поискать другого собеседника",
+            variant: "destructive",
+          });
+        }
+      }
+    };
     
     // Инициатор создает предложение
     if (isInitiator && currentUserId) {
       try {
+        console.log("Creating offer as initiator");
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
         
         const otherUserId = onlineUsers.find(id => id !== currentUserId);
-        if (otherUserId) {
+        if (otherUserId && currentChannel) {
+          console.log("Sending offer to:", otherUserId);
           currentChannel.send({
             type: 'broadcast',
             event: 'offer',
@@ -265,7 +324,12 @@ const VideoChat: React.FC = () => {
   };
   
   const handleOffer = async (offer: RTCSessionDescriptionInit, fromUserId: string) => {
-    if (!localStreamRef.current) return;
+    if (!localStreamRef.current) {
+      console.error("No local stream available when handling offer");
+      return;
+    }
+    
+    console.log("Handling offer from:", fromUserId);
     
     // Создаем новое RTC соединение для ответа
     const pc = new RTCPeerConnection(RTCconfig);
@@ -273,12 +337,17 @@ const VideoChat: React.FC = () => {
     
     // Добавляем локальное видео в соединение
     localStreamRef.current.getTracks().forEach(track => {
-      pc.addTrack(track, localStreamRef.current!);
+      if (localStreamRef.current) {
+        console.log(`Adding track to peer connection: ${track.kind}`);
+        pc.addTrack(track, localStreamRef.current);
+      }
     });
     
     // Обрабатываем получение медиапотока от удаленного пользователя
     pc.ontrack = (event) => {
+      console.log("Received remote track:", event);
       if (remoteVideoRef.current && event.streams[0]) {
+        console.log("Setting remote video stream");
         remoteVideoRef.current.srcObject = event.streams[0];
         setIsSearching(false);
         setIsConnected(true);
@@ -293,7 +362,8 @@ const VideoChat: React.FC = () => {
     
     // Обработка ICE кандидатов
     pc.onicecandidate = (event) => {
-      if (event.candidate) {
+      if (event.candidate && currentChannel) {
+        console.log("Generated ICE candidate as answerer:", event.candidate);
         currentChannel.send({
           type: 'broadcast',
           event: 'ice-candidate',
@@ -305,32 +375,43 @@ const VideoChat: React.FC = () => {
         });
       }
     };
+
+    // Log connection state changes
+    pc.oniceconnectionstatechange = () => {
+      console.log("ICE connection state changed to:", pc.iceConnectionState);
+    };
     
     // Устанавливаем удаленное описание (offer)
-    await pc.setRemoteDescription(new RTCSessionDescription(offer));
-    
-    // Создаем ответ
     try {
+      console.log("Setting remote description (offer)");
+      await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      
+      // Создаем ответ
+      console.log("Creating answer");
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
       
-      currentChannel.send({
-        type: 'broadcast',
-        event: 'answer',
-        payload: {
-          answer: answer,
-          from: currentUserId,
-          target: fromUserId
-        }
-      });
+      if (currentChannel) {
+        console.log("Sending answer to:", fromUserId);
+        currentChannel.send({
+          type: 'broadcast',
+          event: 'answer',
+          payload: {
+            answer: answer,
+            from: currentUserId,
+            target: fromUserId
+          }
+        });
+      }
     } catch (error) {
-      console.error('Error creating answer:', error);
+      console.error('Error handling offer or creating answer:', error);
     }
   };
   
   const handleAnswer = async (answer: RTCSessionDescriptionInit) => {
     if (peerConnection) {
       try {
+        console.log("Setting remote description (answer)");
         await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
       } catch (error) {
         console.error('Error handling answer:', error);
@@ -341,6 +422,7 @@ const VideoChat: React.FC = () => {
   const handleIceCandidate = async (candidate: RTCIceCandidateInit) => {
     if (peerConnection) {
       try {
+        console.log("Adding ICE candidate:", candidate);
         await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
       } catch (error) {
         console.error('Error adding ICE candidate:', error);
@@ -349,8 +431,10 @@ const VideoChat: React.FC = () => {
   };
 
   const handleDisconnect = () => {
+    console.log("Disconnecting");
     setIsConnected(false);
     setIsSearching(true);
+    setConnectionAttempts(0);
     stopCounter();
     
     if (peerConnection) {
@@ -373,6 +457,7 @@ const VideoChat: React.FC = () => {
       const audioTracks = localStreamRef.current.getAudioTracks();
       audioTracks.forEach(track => {
         track.enabled = !track.enabled;
+        console.log(`Audio track ${track.id} ${track.enabled ? 'enabled' : 'disabled'}`);
       });
       setIsMuted(!isMuted);
     }
@@ -383,6 +468,7 @@ const VideoChat: React.FC = () => {
       const videoTracks = localStreamRef.current.getVideoTracks();
       videoTracks.forEach(track => {
         track.enabled = !track.enabled;
+        console.log(`Video track ${track.id} ${track.enabled ? 'enabled' : 'disabled'}`);
       });
       setIsVideoOff(!isVideoOff);
     }
@@ -404,12 +490,9 @@ const VideoChat: React.FC = () => {
   };
 
   const findNextPeer = () => {
-    // В будущей реализации здесь будет логика для отключения от текущего
-    // собеседника и поиска другого
     handleDisconnect();
-    
-    // Для демонстрации просто показываем поиск снова
     setIsSearching(true);
+    setConnectionAttempts(0);
     
     toast({
       title: "Поиск нового собеседника",
@@ -496,6 +579,14 @@ const VideoChat: React.FC = () => {
                 ? "Найден подходящий собеседник, устанавливаем соединение..."
                 : "Ожидаем других пользователей..."}
             </p>
+            <p className="text-gray-500 mt-1">
+              {`Онлайн пользователей: ${onlineUsers.length}`}
+            </p>
+            {connectionAttempts > 0 && (
+              <p className="text-yellow-400 mt-2">
+                Попытка соединения: {connectionAttempts}/3
+              </p>
+            )}
           </div>
         </div>
       )}
