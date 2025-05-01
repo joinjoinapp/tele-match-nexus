@@ -12,6 +12,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/components/ui/use-toast';
 import { X } from 'lucide-react';
+import { useAuth } from '@/hooks/useAuth';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -25,6 +26,7 @@ const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess }) => 
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const { toast } = useToast();
+  const { signIn, signUp } = useAuth();
 
   const validateEmail = (email: string) => {
     return /\S+@\S+\.\S+/.test(email);
@@ -59,13 +61,33 @@ const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess }) => 
     setLoading(true);
     
     try {
-      // Simulate authentication
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      toast({
-        title: isLogin ? "Авторизация успешна!" : "Регистрация успешна!",
-        description: "Добро пожаловать в TeleMatch",
-      });
+      if (isLogin) {
+        const { error } = await signIn(email, password);
+        if (error) {
+          toast({
+            title: "Ошибка входа",
+            description: "Неверный email или пароль",
+            variant: "destructive",
+          });
+          return;
+        }
+      } else {
+        const { error } = await signUp(email, password);
+        if (error) {
+          toast({
+            title: "Ошибка регистрации",
+            description: "Не удалось зарегистрироваться. Возможно, пользователь уже существует.",
+            variant: "destructive",
+          });
+          return;
+        }
+        setIsLogin(true);
+        toast({
+          title: "Регистрация успешна!",
+          description: "Вы можете войти в систему, используя свой email и пароль.",
+        });
+        return;
+      }
       
       onSuccess();
     } catch (error) {

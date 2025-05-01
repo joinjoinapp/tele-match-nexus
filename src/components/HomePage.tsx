@@ -4,18 +4,22 @@ import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import Header from './Header';
 import AuthModal from './AuthModal';
+import { useAuth } from '@/hooks/useAuth';
 
 const HomePage: React.FC = () => {
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
   const navigate = useNavigate();
+  const { user } = useAuth();
 
   const handleAuthClick = () => {
-    setIsAuthModalOpen(true);
+    if (user) {
+      navigate('/video-chat');
+    } else {
+      setIsAuthModalOpen(true);
+    }
   };
 
   const handleAuthSuccess = () => {
-    setIsAuthenticated(true);
     setIsAuthModalOpen(false);
     navigate('/video-chat');
   };
@@ -26,7 +30,7 @@ const HomePage: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-black text-white">
-      <Header isAuthenticated={isAuthenticated} onAuthClick={handleAuthClick} />
+      <Header isAuthenticated={!!user} onAuthClick={handleAuthClick} />
       
       <div className="container mx-auto px-4 min-h-screen flex flex-col lg:flex-row items-center justify-center lg:justify-between">
         <div className="lg:w-1/2 pt-16 lg:pt-0 text-center lg:text-left">
@@ -48,7 +52,7 @@ const HomePage: React.FC = () => {
               className="bg-primary hover:bg-primary/90 py-6 px-8 text-lg"
               onClick={handleAuthClick}
             >
-              Начать
+              {user ? 'Начать чат' : 'Начать'}
             </Button>
             <Button 
               variant="outline" 
