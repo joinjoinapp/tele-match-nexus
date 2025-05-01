@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { RefreshCcw, VideoOff, MicOff, Maximize2 } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
+import { supabase } from '@/integrations/supabase/client';
 
 const VideoChat: React.FC = () => {
   const [isSearching, setIsSearching] = useState(true);
@@ -12,10 +13,14 @@ const VideoChat: React.FC = () => {
   const [isVideoOff, setIsVideoOff] = useState(false);
   const [matchTokens, setMatchTokens] = useState(0);
   const [showCoin, setShowCoin] = useState(false);
+  const [onlineUsers, setOnlineUsers] = useState<string[]>([]);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [peerConnection, setPeerConnection] = useState<RTCPeerConnection | null>(null);
+  const [currentChannel, setCurrentChannel] = useState<any>(null);
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
-  const streamRef = useRef<MediaStream | null>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const navigate = useNavigate();
   const { toast } = useToast();
@@ -46,7 +51,127 @@ const VideoChat: React.FC = () => {
       timerRef.current = null;
     }
   };
+  
+  // Конфигурация WebRTC
+  const RTCconfig = {
+    iceServers: [
+      { urls: "stun:stun.l.google.com:19302" },
+    ]
+  };
 
+  // Обработка присутствия пользователей
+  useEffect(() => {
+    const checkSession = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        navigate('/');
+        toast({
+          title: "Требуется авторизация",
+          description: "Для использования видеочата необходимо войти в систему",
+          variant: "destructive",
+        });
+        return;
+      }
+      setCurrentUserId(session.user.id);
+      
+      // Настройка присутствия
+      setupPresence(session.user.id);
+    };
+    
+    checkSession();
+    
+    return () => {
+      if (currentChannel) {
+        supabase.removeChannel(currentChannel);
+      }
+      if (peerConnection) {
+        peerConnection.close();
+      }
+      stopCounter();
+      if (localStreamRef.current) {
+        localStreamRef.current.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, []);
+  
+  const setupPresence = (userId: string) => {
+    // Создаем канал присутствия
+    const channel = supabase.channel('online-users', {
+      config: {
+        presence: {
+          key: userId,
+        },
+      },
+    });
+    
+    channel
+      .on('presence', { event: 'sync' }, () => {
+        const state = channel.presenceState();
+        const userIds = Object.keys(state);
+        setOnlineUsers(userIds);
+        
+        // Если есть только 2 пользователя онлайн, устанавливаем соединение
+        if (userIds.length === 2 && userIds.includes(userId) && !isConnected) {
+          const otherUserId = userIds.find(id => id !== userId);
+          if (otherUserId) {
+            initiateCall(userId < otherUserId);
+          }
+        } else if (userIds.length < 2 && isConnected) {
+          handleDisconnect();
+        }
+      })
+      .on('presence', { event: 'join' }, ({ key }) => {
+        toast({
+          title: "Пользователь онлайн",
+          description: `ID: ${key.substring(0, 8)}...`,
+        });
+      })
+      .on('presence', { event: 'leave' }, () => {
+        if (isConnected) {
+          handleDisconnect();
+        }
+      })
+      .subscribe(async (status) => {
+        if (status === 'SUBSCRIBED') {
+          await channel.track({ online_at: new Date().toISOString() });
+        }
+      });
+    
+    // Создаем канал для сигналов WebRTC
+    const signalChannel = supabase.channel('webrtc-signaling');
+    
+    signalChannel.on(
+      'broadcast',
+      { event: 'offer' },
+      async ({ payload }) => {
+        if (payload.target === userId) {
+          handleOffer(payload.offer, payload.from);
+        }
+      }
+    ).on(
+      'broadcast',
+      { event: 'answer' },
+      async ({ payload }) => {
+        if (payload.target === userId) {
+          handleAnswer(payload.answer);
+        }
+      }
+    ).on(
+      'broadcast',
+      { event: 'ice-candidate' },
+      async ({ payload }) => {
+        if (payload.target === userId) {
+          handleIceCandidate(payload.candidate);
+        }
+      }
+    ).subscribe();
+    
+    setCurrentChannel(signalChannel);
+    
+    // Инициализируем медиа устройства
+    setupMediaDevices();
+  };
+  
   const setupMediaDevices = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ 
@@ -54,16 +179,11 @@ const VideoChat: React.FC = () => {
         audio: true 
       });
       
-      streamRef.current = stream;
+      localStreamRef.current = stream;
       
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = stream;
       }
-      
-      // Simulate connecting to another user after 3 seconds
-      setTimeout(() => {
-        simulateConnection();
-      }, 3000);
       
     } catch (error) {
       console.error('Error accessing media devices:', error);
@@ -74,29 +194,183 @@ const VideoChat: React.FC = () => {
       });
     }
   };
-
-  const simulateConnection = () => {
-    setIsSearching(false);
-    setIsConnected(true);
+  
+  const initiateCall = async (isInitiator: boolean) => {
+    if (!localStreamRef.current) return;
     
-    // Simulate remote video using the same stream (for demo purposes)
-    if (remoteVideoRef.current && streamRef.current) {
-      // In a real app, this would be the remote peer's stream
-      // For demo, we're just using our own stream
-      remoteVideoRef.current.srcObject = streamRef.current;
+    // Создаем новое RTC соединение
+    const pc = new RTCPeerConnection(RTCconfig);
+    setPeerConnection(pc);
+    
+    // Добавляем локальное видео в соединение
+    localStreamRef.current.getTracks().forEach(track => {
+      pc.addTrack(track, localStreamRef.current!);
+    });
+    
+    // Обрабатываем получение медиапотока от удаленного пользователя
+    pc.ontrack = (event) => {
+      if (remoteVideoRef.current && event.streams[0]) {
+        remoteVideoRef.current.srcObject = event.streams[0];
+        setIsSearching(false);
+        setIsConnected(true);
+        startCounter();
+        
+        toast({
+          title: "Соединение установлено!",
+          description: "Вы подключены к собеседнику",
+        });
+      }
+    };
+    
+    // Обработка ICE кандидатов
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        const otherUserId = onlineUsers.find(id => id !== currentUserId);
+        if (otherUserId) {
+          currentChannel.send({
+            type: 'broadcast',
+            event: 'ice-candidate',
+            payload: {
+              candidate: event.candidate,
+              from: currentUserId,
+              target: otherUserId
+            }
+          });
+        }
+      }
+    };
+    
+    // Инициатор создает предложение
+    if (isInitiator && currentUserId) {
+      try {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        
+        const otherUserId = onlineUsers.find(id => id !== currentUserId);
+        if (otherUserId) {
+          currentChannel.send({
+            type: 'broadcast',
+            event: 'offer',
+            payload: {
+              offer: offer,
+              from: currentUserId,
+              target: otherUserId
+            }
+          });
+        }
+      } catch (error) {
+        console.error('Error creating offer:', error);
+      }
+    }
+  };
+  
+  const handleOffer = async (offer: RTCSessionDescriptionInit, fromUserId: string) => {
+    if (!localStreamRef.current) return;
+    
+    // Создаем новое RTC соединение для ответа
+    const pc = new RTCPeerConnection(RTCconfig);
+    setPeerConnection(pc);
+    
+    // Добавляем локальное видео в соединение
+    localStreamRef.current.getTracks().forEach(track => {
+      pc.addTrack(track, localStreamRef.current!);
+    });
+    
+    // Обрабатываем получение медиапотока от удаленного пользователя
+    pc.ontrack = (event) => {
+      if (remoteVideoRef.current && event.streams[0]) {
+        remoteVideoRef.current.srcObject = event.streams[0];
+        setIsSearching(false);
+        setIsConnected(true);
+        startCounter();
+        
+        toast({
+          title: "Соединение установлено!",
+          description: "Вы подключены к собеседнику",
+        });
+      }
+    };
+    
+    // Обработка ICE кандидатов
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        currentChannel.send({
+          type: 'broadcast',
+          event: 'ice-candidate',
+          payload: {
+            candidate: event.candidate,
+            from: currentUserId,
+            target: fromUserId
+          }
+        });
+      }
+    };
+    
+    // Устанавливаем удаленное описание (offer)
+    await pc.setRemoteDescription(new RTCSessionDescription(offer));
+    
+    // Создаем ответ
+    try {
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      
+      currentChannel.send({
+        type: 'broadcast',
+        event: 'answer',
+        payload: {
+          answer: answer,
+          from: currentUserId,
+          target: fromUserId
+        }
+      });
+    } catch (error) {
+      console.error('Error creating answer:', error);
+    }
+  };
+  
+  const handleAnswer = async (answer: RTCSessionDescriptionInit) => {
+    if (peerConnection) {
+      try {
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+      } catch (error) {
+        console.error('Error handling answer:', error);
+      }
+    }
+  };
+  
+  const handleIceCandidate = async (candidate: RTCIceCandidateInit) => {
+    if (peerConnection) {
+      try {
+        await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (error) {
+        console.error('Error adding ICE candidate:', error);
+      }
+    }
+  };
+
+  const handleDisconnect = () => {
+    setIsConnected(false);
+    setIsSearching(true);
+    stopCounter();
+    
+    if (peerConnection) {
+      peerConnection.close();
+      setPeerConnection(null);
     }
     
-    startCounter();
+    if (remoteVideoRef.current) {
+      remoteVideoRef.current.srcObject = null;
+    }
     
     toast({
-      title: "Соединение установлено!",
-      description: "Вы подключены к собеседнику",
+      title: "Соединение разорвано",
+      description: "Собеседник отключился",
     });
   };
 
   const toggleMute = () => {
-    if (streamRef.current) {
-      const audioTracks = streamRef.current.getAudioTracks();
+    if (localStreamRef.current) {
+      const audioTracks = localStreamRef.current.getAudioTracks();
       audioTracks.forEach(track => {
         track.enabled = !track.enabled;
       });
@@ -105,8 +379,8 @@ const VideoChat: React.FC = () => {
   };
 
   const toggleVideo = () => {
-    if (streamRef.current) {
-      const videoTracks = streamRef.current.getVideoTracks();
+    if (localStreamRef.current) {
+      const videoTracks = localStreamRef.current.getVideoTracks();
       videoTracks.forEach(track => {
         track.enabled = !track.enabled;
       });
@@ -130,41 +404,36 @@ const VideoChat: React.FC = () => {
   };
 
   const findNextPeer = () => {
-    setIsConnected(false);
+    // В будущей реализации здесь будет логика для отключения от текущего
+    // собеседника и поиска другого
+    handleDisconnect();
+    
+    // Для демонстрации просто показываем поиск снова
     setIsSearching(true);
-    stopCounter();
     
     toast({
       title: "Поиск нового собеседника",
       description: "Ожидайте подключения...",
     });
-    
-    // Simulate finding a new peer after 2 seconds
-    setTimeout(() => {
-      simulateConnection();
-    }, 2000);
   };
 
   const exitChat = () => {
     stopCounter();
     
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
+    if (peerConnection) {
+      peerConnection.close();
+    }
+    
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach(track => track.stop());
+    }
+    
+    if (currentChannel) {
+      supabase.removeChannel(currentChannel);
     }
     
     navigate('/');
   };
-
-  useEffect(() => {
-    setupMediaDevices();
-    
-    return () => {
-      stopCounter();
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
-      }
-    };
-  }, []);
 
   const generateCoinPositions = () => {
     return {
@@ -185,7 +454,7 @@ const VideoChat: React.FC = () => {
         />
         
         {/* Local Video (small overlay) */}
-        <div className="local-video">
+        <div className="absolute bottom-24 right-4 w-[200px] h-[150px] rounded-lg overflow-hidden border-2 border-gray-700 shadow-lg">
           <video 
             ref={localVideoRef} 
             autoPlay 
@@ -222,7 +491,11 @@ const VideoChat: React.FC = () => {
               <div className="w-16 h-16 border-t-4 border-primary border-solid rounded-full animate-spin mx-auto"></div>
             </div>
             <p className="text-2xl font-bold text-white">Поиск собеседника...</p>
-            <p className="text-gray-400 mt-2">Пожалуйста, подождите</p>
+            <p className="text-gray-400 mt-2">
+              {onlineUsers.length > 1 
+                ? "Найден подходящий собеседник, устанавливаем соединение..."
+                : "Ожидаем других пользователей..."}
+            </p>
           </div>
         </div>
       )}
