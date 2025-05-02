@@ -108,20 +108,20 @@ const VideoChat: React.FC = () => {
     pc.onicecandidate = (event) => {
       if (event.candidate) {
         addLog(`Generated ICE candidate: ${event.candidate.candidate.substring(0, 50)}...`);
-        const otherUserId = onlineUsers.find(id => id !== currentUserId);
-        if (otherUserId && signalChannel) {
-          addLog(`Sending ICE candidate to: ${otherUserId.substring(0, 8)}...`);
+        const otherUser = onlineUsers.find(id => id !== currentUserId);
+        if (otherUser && signalChannel) {
+          addLog(`Sending ICE candidate to: ${otherUser.substring(0, 8)}...`);
           signalChannel.send({
             type: 'broadcast',
             event: 'ice-candidate',
             payload: {
               candidate: event.candidate,
               from: currentUserId,
-              target: otherUserId
+              target: otherUser
             }
           });
         } else {
-          addLog("Cannot send ICE candidate: missing otherUserId or signalChannel", "warn");
+          addLog("Cannot send ICE candidate: missing otherUser or signalChannel", "warn");
         }
       }
     };
@@ -138,10 +138,10 @@ const VideoChat: React.FC = () => {
           // Close the current connection and try again after a delay
           pc.close();
           setTimeout(() => {
-            const isInitiator = currentUserId && otherUserId ? currentUserId < otherUserId : false;
-            const otherUserId = onlineUsers.find(id => id !== currentUserId);
+            const otherUser = onlineUsers.find(id => id !== currentUserId);
+            const isInitiator = currentUserId && otherUser ? currentUserId < otherUser : false;
             
-            if (otherUserId) {
+            if (otherUser) {
               initiateCall(isInitiator);
             } else {
               addLog("No other user available to connect to", "warn");
@@ -272,10 +272,10 @@ const VideoChat: React.FC = () => {
         
         // If there are only 2 users online, establish connection
         if (userIds.length === 2 && userIds.includes(userId) && !isConnected) {
-          const otherUserId = userIds.find(id => id !== userId);
-          if (otherUserId) {
-            addLog(`Two users online, initiating call between ${userId.substring(0, 8)}... and ${otherUserId.substring(0, 8)}...`);
-            initiateCall(userId < otherUserId);
+          const otherUser = userIds.find(id => id !== userId);
+          if (otherUser) {
+            addLog(`Two users online, initiating call between ${userId.substring(0, 8)}... and ${otherUser.substring(0, 8)}...`);
+            initiateCall(userId < otherUser);
           }
         } else if (userIds.length < 2 && isConnected) {
           addLog("Less than 2 users online, disconnecting", "warn");
@@ -441,20 +441,20 @@ const VideoChat: React.FC = () => {
         await pc.setLocalDescription(offer);
         addLog("Local description set");
         
-        const otherUserId = onlineUsers.find(id => id !== currentUserId);
-        if (otherUserId && signalChannel) {
-          addLog(`Sending offer to: ${otherUserId.substring(0, 8)}...`);
+        const otherUser = onlineUsers.find(id => id !== currentUserId);
+        if (otherUser && signalChannel) {
+          addLog(`Sending offer to: ${otherUser.substring(0, 8)}...`);
           signalChannel.send({
             type: 'broadcast',
             event: 'offer',
             payload: {
               offer: offer,
               from: currentUserId,
-              target: otherUserId
+              target: otherUser
             }
           });
         } else {
-          addLog("Cannot send offer: missing otherUserId or signalChannel", "warn");
+          addLog("Cannot send offer: missing otherUser or signalChannel", "warn");
         }
       } catch (error) {
         addLog(`Error creating or sending offer: ${(error as Error).message}`, "error");
