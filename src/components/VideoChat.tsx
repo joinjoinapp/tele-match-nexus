@@ -2,10 +2,21 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
-import { RefreshCcw, VideoOff, MicOff, Maximize2 } from 'lucide-react';
+import { RefreshCcw, VideoOff, MicOff, Maximize2, Info } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
+import { toast as sonnerToast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
+
+// Utility function for logging with timestamps
+const logWithTime = (message: string, data?: any) => {
+  const timestamp = new Date().toISOString();
+  if (data) {
+    console.log(`[${timestamp}] ${message}`, data);
+  } else {
+    console.log(`[${timestamp}] ${message}`);
+  }
+};
 
 const VideoChat: React.FC = () => {
   const [isSearching, setIsSearching] = useState(true);
@@ -18,7 +29,11 @@ const VideoChat: React.FC = () => {
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [peerConnection, setPeerConnection] = useState<RTCPeerConnection | null>(null);
   const [currentChannel, setCurrentChannel] = useState<any>(null);
+  const [signalChannel, setSignalChannel] = useState<any>(null);
   const [connectionAttempts, setConnectionAttempts] = useState(0);
+  const [connectionState, setConnectionState] = useState<string>('new');
+  const [showDebug, setShowDebug] = useState(false);
+  const [debugLogs, setDebugLogs] = useState<string[]>([]);
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
@@ -27,6 +42,20 @@ const VideoChat: React.FC = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { user } = useAuth();
+
+  // Add logging function to track app events
+  const addLog = (message: string, level: 'info' | 'warn' | 'error' = 'info') => {
+    const timestamp = new Date().toISOString().split('T')[1].split('.')[0];
+    const logEntry = `[${timestamp}] ${message}`;
+    console.log(logEntry);
+    setDebugLogs(prev => [logEntry, ...prev].slice(0, 50)); // Keep last 50 logs
+    
+    if (level === 'error') {
+      console.error(message);
+    } else if (level === 'warn') {
+      console.warn(message);
+    }
+  };
 
   const animateCoin = () => {
     setShowCoin(true);
@@ -55,19 +84,124 @@ const VideoChat: React.FC = () => {
     }
   };
   
-  // Конфигурация WebRTC
+  // Enhanced WebRTC configuration with more STUN servers
   const RTCconfig = {
     iceServers: [
       { urls: "stun:stun.l.google.com:19302" },
       { urls: "stun:stun1.l.google.com:19302" },
       { urls: "stun:stun2.l.google.com:19302" },
-    ]
+      { urls: "stun:stun3.l.google.com:19302" },
+      { urls: "stun:stun4.l.google.com:19302" },
+      { urls: "stun:stun.stunprotocol.org:3478" },
+      { urls: "stun:stun.ekiga.net:3478" },
+      { urls: "stun:openrelay.metered.ca:80" }
+    ],
+    iceCandidatePoolSize: 10,
+    sdpSemantics: 'unified-plan'
   };
 
-  // Обработка присутствия пользователей
+  // Unified function to create peer connections with consistent event handling
+  const createPeerConnection = () => {
+    addLog("Creating new RTCPeerConnection");
+    const pc = new RTCPeerConnection(RTCconfig);
+    
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        addLog(`Generated ICE candidate: ${event.candidate.candidate.substring(0, 50)}...`);
+        const otherUserId = onlineUsers.find(id => id !== currentUserId);
+        if (otherUserId && signalChannel) {
+          addLog(`Sending ICE candidate to: ${otherUserId.substring(0, 8)}...`);
+          signalChannel.send({
+            type: 'broadcast',
+            event: 'ice-candidate',
+            payload: {
+              candidate: event.candidate,
+              from: currentUserId,
+              target: otherUserId
+            }
+          });
+        } else {
+          addLog("Cannot send ICE candidate: missing otherUserId or signalChannel", "warn");
+        }
+      }
+    };
+    
+    pc.oniceconnectionstatechange = () => {
+      addLog(`ICE connection state changed to: ${pc.iceConnectionState}`);
+      setConnectionState(pc.iceConnectionState);
+      
+      if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
+        if (connectionAttempts < 5) {
+          addLog(`Connection attempt ${connectionAttempts + 1} failed, retrying...`, "warn");
+          setConnectionAttempts(prev => prev + 1);
+          
+          // Close the current connection and try again after a delay
+          pc.close();
+          setTimeout(() => {
+            const isInitiator = currentUserId && otherUserId ? currentUserId < otherUserId : false;
+            const otherUserId = onlineUsers.find(id => id !== currentUserId);
+            
+            if (otherUserId) {
+              initiateCall(isInitiator);
+            } else {
+              addLog("No other user available to connect to", "warn");
+            }
+          }, 1000);
+        } else {
+          addLog("Max connection attempts reached, giving up", "error");
+          handleDisconnect(true);
+          toast({
+            title: "Не удалось установить соединение",
+            description: "Сетевое соединение не удается установить. Возможно проблемы с NAT или брандмауэром",
+            variant: "destructive",
+          });
+        }
+      } else if (pc.iceConnectionState === 'connected') {
+        addLog("ICE connection established successfully!");
+        setIsSearching(false);
+        setIsConnected(true);
+      }
+    };
+    
+    pc.onconnectionstatechange = () => {
+      addLog(`Connection state changed to: ${pc.connectionState}`);
+      
+      if (pc.connectionState === 'connected') {
+        addLog("Peer connection established successfully!");
+        sonnerToast.success("Соединение установлено!");
+      }
+    };
+    
+    pc.onsignalingstatechange = () => {
+      addLog(`Signaling state changed to: ${pc.signalingState}`);
+    };
+    
+    pc.ontrack = (event) => {
+      addLog(`Received remote track: ${event.track.kind}`);
+      if (remoteVideoRef.current && event.streams[0]) {
+        addLog("Setting remote video stream");
+        remoteVideoRef.current.srcObject = event.streams[0];
+        setIsSearching(false);
+        setIsConnected(true);
+        startCounter();
+        
+        toast({
+          title: "Соединение установлено!",
+          description: "Вы подключены к собеседнику",
+        });
+      } else {
+        addLog("Cannot set remote stream: missing remoteVideoRef or stream", "error");
+      }
+    };
+    
+    return pc;
+  };
+
+  // Enhanced presence system with better error handling
   useEffect(() => {
     const checkSession = async () => {
       if (!user) {
+        addLog("No authenticated user, redirecting to login", "warn");
         navigate('/');
         toast({
           title: "Требуется авторизация",
@@ -78,32 +212,49 @@ const VideoChat: React.FC = () => {
       }
       
       setCurrentUserId(user.id);
-      console.log("Current user ID:", user.id);
+      addLog(`Current user authenticated: ${user.id.substring(0, 8)}...`);
       
-      // Настройка присутствия
+      // Setup presence
       setupPresence(user.id);
     };
     
     checkSession();
     
     return () => {
-      if (currentChannel) {
-        supabase.removeChannel(currentChannel);
-      }
-      if (peerConnection) {
-        peerConnection.close();
-      }
-      stopCounter();
-      if (localStreamRef.current) {
-        localStreamRef.current.getTracks().forEach(track => track.stop());
-      }
+      cleanup();
     };
-  }, [user]);
+  }, [user, navigate]);
+  
+  const cleanup = () => {
+    addLog("Cleaning up resources");
+    
+    if (currentChannel) {
+      addLog("Removing presence channel");
+      supabase.removeChannel(currentChannel);
+    }
+    
+    if (signalChannel) {
+      addLog("Removing signal channel");
+      supabase.removeChannel(signalChannel);
+    }
+    
+    if (peerConnection) {
+      addLog("Closing peer connection");
+      peerConnection.close();
+    }
+    
+    stopCounter();
+    
+    if (localStreamRef.current) {
+      addLog("Stopping local media tracks");
+      localStreamRef.current.getTracks().forEach(track => track.stop());
+    }
+  };
   
   const setupPresence = (userId: string) => {
-    console.log("Setting up presence for user:", userId);
+    addLog(`Setting up presence for user: ${userId.substring(0, 8)}...`);
     
-    // Создаем канал присутствия
+    // Create presence channel with better error handling
     const channel = supabase.channel('online-users', {
       config: {
         presence: {
@@ -116,49 +267,53 @@ const VideoChat: React.FC = () => {
       .on('presence', { event: 'sync' }, () => {
         const state = channel.presenceState();
         const userIds = Object.keys(state);
-        console.log("Presence sync - Online users:", userIds);
+        addLog(`Presence sync - Online users: ${userIds.length}`);
         setOnlineUsers(userIds);
         
-        // Если есть только 2 пользователя онлайн, устанавливаем соединение
+        // If there are only 2 users online, establish connection
         if (userIds.length === 2 && userIds.includes(userId) && !isConnected) {
           const otherUserId = userIds.find(id => id !== userId);
           if (otherUserId) {
-            console.log("Two users online, initiating call between", userId, "and", otherUserId);
+            addLog(`Two users online, initiating call between ${userId.substring(0, 8)}... and ${otherUserId.substring(0, 8)}...`);
             initiateCall(userId < otherUserId);
           }
         } else if (userIds.length < 2 && isConnected) {
-          console.log("Less than 2 users online, disconnecting");
+          addLog("Less than 2 users online, disconnecting", "warn");
           handleDisconnect();
+        } else if (userIds.length > 2) {
+          addLog(`${userIds.length} users online, waiting for connection pairing`);
         }
       })
       .on('presence', { event: 'join' }, ({ key }) => {
-        console.log("User joined:", key);
+        addLog(`User joined: ${key.substring(0, 8)}...`);
         toast({
           title: "Пользователь онлайн",
           description: `ID: ${key.substring(0, 8)}...`,
         });
       })
       .on('presence', { event: 'leave' }, ({ key }) => {
-        console.log("User left:", key);
+        addLog(`User left: ${key.substring(0, 8)}...`, "warn");
         if (isConnected) {
           handleDisconnect();
         }
       })
       .subscribe(async (status) => {
-        console.log("Presence channel status:", status);
+        addLog(`Presence channel status: ${status}`);
         if (status === 'SUBSCRIBED') {
-          await channel.track({ online_at: new Date().toISOString() });
+          await channel.track({ online_at: new Date().toISOString() })
+            .then(() => addLog("Presence tracked successfully"))
+            .catch(error => addLog(`Error tracking presence: ${error.message}`, "error"));
         }
       });
     
-    // Создаем канал для сигналов WebRTC
-    const signalChannel = supabase.channel('webrtc-signaling');
+    // Create signaling channel for WebRTC
+    const signalChan = supabase.channel('webrtc-signaling');
     
-    signalChannel.on(
+    signalChan.on(
       'broadcast',
       { event: 'offer' },
       async ({ payload }) => {
-        console.log("Received offer:", payload);
+        addLog(`Received offer from: ${payload.from.substring(0, 8)}...`);
         if (payload.target === userId) {
           handleOffer(payload.offer, payload.from);
         }
@@ -167,7 +322,7 @@ const VideoChat: React.FC = () => {
       'broadcast',
       { event: 'answer' },
       async ({ payload }) => {
-        console.log("Received answer:", payload);
+        addLog(`Received answer from: ${payload.from.substring(0, 8)}...`);
         if (payload.target === userId) {
           handleAnswer(payload.answer);
         }
@@ -176,138 +331,120 @@ const VideoChat: React.FC = () => {
       'broadcast',
       { event: 'ice-candidate' },
       async ({ payload }) => {
-        console.log("Received ICE candidate:", payload);
+        addLog(`Received ICE candidate from: ${payload.from.substring(0, 8)}...`);
         if (payload.target === userId) {
           handleIceCandidate(payload.candidate);
         }
       }
     ).subscribe((status) => {
-      console.log("Signal channel status:", status);
+      addLog(`Signal channel status: ${status}`);
     });
     
-    setCurrentChannel(signalChannel);
+    setCurrentChannel(channel);
+    setSignalChannel(signalChan);
     
-    // Инициализируем медиа устройства
+    // Setup media devices
     setupMediaDevices();
   };
   
   const setupMediaDevices = async () => {
     try {
-      console.log("Setting up media devices");
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: true, 
-        audio: true 
-      });
+      addLog("Setting up media devices");
+      
+      // Request permissions with constraints that work across browsers
+      const constraints = {
+        audio: true,
+        video: {
+          width: { ideal: 640, max: 1280 },
+          height: { ideal: 480, max: 720 },
+          frameRate: { ideal: 15, max: 30 }
+        }
+      };
+      
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      
+      addLog(`Got media stream with ${stream.getVideoTracks().length} video and ${stream.getAudioTracks().length} audio tracks`);
       
       localStreamRef.current = stream;
       
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = stream;
-        console.log("Local video stream set up successfully");
+        localVideoRef.current.muted = true; // Always mute local video to prevent echo
+        addLog("Local video stream set up successfully");
+      } else {
+        addLog("No local video element reference available", "warn");
       }
       
-    } catch (error) {
+    } catch (error: any) {
+      addLog(`Error accessing media devices: ${error.message}`, "error");
       console.error('Error accessing media devices:', error);
+      
       toast({
         title: "Ошибка доступа к камере",
         description: "Проверьте разрешения и попробуйте снова",
         variant: "destructive",
       });
+      
+      // Try again with just audio if video fails
+      try {
+        addLog("Retrying with audio only");
+        const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        localStreamRef.current = audioStream;
+        setIsVideoOff(true);
+        
+        toast({
+          title: "Видео недоступно",
+          description: "Используется только аудио",
+        });
+      } catch (audioError) {
+        addLog(`Failed to get even audio: ${(audioError as any).message}`, "error");
+      }
     }
   };
   
   const initiateCall = async (isInitiator: boolean) => {
     if (!localStreamRef.current) {
-      console.error("No local stream available");
+      addLog("No local stream available", "error");
       return;
     }
     
-    console.log(`Initiating call as ${isInitiator ? 'initiator' : 'receiver'}`);
+    addLog(`Initiating call as ${isInitiator ? 'initiator' : 'receiver'}`);
     
-    // Создаем новое RTC соединение
-    const pc = new RTCPeerConnection(RTCconfig);
+    // Create new RTC connection using the unified function
+    const pc = createPeerConnection();
     setPeerConnection(pc);
     
-    // Добавляем локальное видео в соединение
-    localStreamRef.current.getTracks().forEach(track => {
-      if (localStreamRef.current) {
-        console.log(`Adding track to peer connection: ${track.kind}`);
-        pc.addTrack(track, localStreamRef.current);
-      }
-    });
-    
-    // Обрабатываем получение медиапотока от удаленного пользователя
-    pc.ontrack = (event) => {
-      console.log("Received remote track:", event);
-      if (remoteVideoRef.current && event.streams[0]) {
-        console.log("Setting remote video stream");
-        remoteVideoRef.current.srcObject = event.streams[0];
-        setIsSearching(false);
-        setIsConnected(true);
-        startCounter();
-        
-        toast({
-          title: "Соединение установлено!",
-          description: "Вы подключены к собеседнику",
-        });
-      }
-    };
-    
-    // Обработка ICE кандидатов
-    pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        console.log("Generated ICE candidate:", event.candidate);
-        const otherUserId = onlineUsers.find(id => id !== currentUserId);
-        if (otherUserId && currentChannel) {
-          console.log("Sending ICE candidate to:", otherUserId);
-          currentChannel.send({
-            type: 'broadcast',
-            event: 'ice-candidate',
-            payload: {
-              candidate: event.candidate,
-              from: currentUserId,
-              target: otherUserId
-            }
-          });
+    // Add local tracks to the connection
+    try {
+      localStreamRef.current.getTracks().forEach(track => {
+        if (localStreamRef.current) {
+          addLog(`Adding ${track.kind} track to peer connection`);
+          pc.addTrack(track, localStreamRef.current);
         }
-      }
-    };
-
-    // Log connection state changes
-    pc.oniceconnectionstatechange = () => {
-      console.log("ICE connection state changed to:", pc.iceConnectionState);
-      if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
-        if (connectionAttempts < 3) {
-          console.log(`Connection attempt ${connectionAttempts + 1} failed, retrying...`);
-          setConnectionAttempts(prev => prev + 1);
-          // Reset connection and try again
-          pc.close();
-          setTimeout(() => {
-            initiateCall(isInitiator);
-          }, 1000);
-        } else {
-          console.log("Max connection attempts reached, giving up");
-          handleDisconnect();
-          toast({
-            title: "Не удалось установить соединение",
-            description: "Попробуйте обновить страницу или поискать другого собеседника",
-            variant: "destructive",
-          });
-        }
-      }
-    };
+      });
+    } catch (error) {
+      addLog(`Error adding tracks to peer connection: ${(error as Error).message}`, "error");
+      return;
+    }
     
-    // Инициатор создает предложение
+    // If initiator, create and send offer
     if (isInitiator && currentUserId) {
       try {
-        console.log("Creating offer as initiator");
-        const offer = await pc.createOffer();
+        addLog("Creating offer as initiator");
+        const offer = await pc.createOffer({
+          offerToReceiveAudio: true,
+          offerToReceiveVideo: true,
+        });
+        
+        addLog(`Created offer: ${JSON.stringify(offer).substring(0, 100)}...`);
+        
         await pc.setLocalDescription(offer);
+        addLog("Local description set");
         
         const otherUserId = onlineUsers.find(id => id !== currentUserId);
-        if (otherUserId && currentChannel) {
-          console.log("Sending offer to:", otherUserId);
-          currentChannel.send({
+        if (otherUserId && signalChannel) {
+          addLog(`Sending offer to: ${otherUserId.substring(0, 8)}...`);
+          signalChannel.send({
             type: 'broadcast',
             event: 'offer',
             payload: {
@@ -316,8 +453,11 @@ const VideoChat: React.FC = () => {
               target: otherUserId
             }
           });
+        } else {
+          addLog("Cannot send offer: missing otherUserId or signalChannel", "warn");
         }
       } catch (error) {
+        addLog(`Error creating or sending offer: ${(error as Error).message}`, "error");
         console.error('Error creating offer:', error);
       }
     }
@@ -325,75 +465,46 @@ const VideoChat: React.FC = () => {
   
   const handleOffer = async (offer: RTCSessionDescriptionInit, fromUserId: string) => {
     if (!localStreamRef.current) {
-      console.error("No local stream available when handling offer");
+      addLog("No local stream available when handling offer", "error");
       return;
     }
     
-    console.log("Handling offer from:", fromUserId);
+    addLog(`Handling offer from: ${fromUserId.substring(0, 8)}...`);
     
-    // Создаем новое RTC соединение для ответа
-    const pc = new RTCPeerConnection(RTCconfig);
+    // Create new RTC connection for answer using the unified function
+    const pc = createPeerConnection();
     setPeerConnection(pc);
     
-    // Добавляем локальное видео в соединение
-    localStreamRef.current.getTracks().forEach(track => {
-      if (localStreamRef.current) {
-        console.log(`Adding track to peer connection: ${track.kind}`);
-        pc.addTrack(track, localStreamRef.current);
-      }
-    });
-    
-    // Обрабатываем получение медиапотока от удаленного пользователя
-    pc.ontrack = (event) => {
-      console.log("Received remote track:", event);
-      if (remoteVideoRef.current && event.streams[0]) {
-        console.log("Setting remote video stream");
-        remoteVideoRef.current.srcObject = event.streams[0];
-        setIsSearching(false);
-        setIsConnected(true);
-        startCounter();
-        
-        toast({
-          title: "Соединение установлено!",
-          description: "Вы подключены к собеседнику",
-        });
-      }
-    };
-    
-    // Обработка ICE кандидатов
-    pc.onicecandidate = (event) => {
-      if (event.candidate && currentChannel) {
-        console.log("Generated ICE candidate as answerer:", event.candidate);
-        currentChannel.send({
-          type: 'broadcast',
-          event: 'ice-candidate',
-          payload: {
-            candidate: event.candidate,
-            from: currentUserId,
-            target: fromUserId
-          }
-        });
-      }
-    };
-
-    // Log connection state changes
-    pc.oniceconnectionstatechange = () => {
-      console.log("ICE connection state changed to:", pc.iceConnectionState);
-    };
-    
-    // Устанавливаем удаленное описание (offer)
+    // Add local tracks to the connection
     try {
-      console.log("Setting remote description (offer)");
+      localStreamRef.current.getTracks().forEach(track => {
+        if (localStreamRef.current) {
+          addLog(`Adding ${track.kind} track to peer connection as answerer`);
+          pc.addTrack(track, localStreamRef.current);
+        }
+      });
+    } catch (error) {
+      addLog(`Error adding tracks to peer connection: ${(error as Error).message}`, "error");
+      return;
+    }
+    
+    // Set remote description (offer) with error handling
+    try {
+      addLog("Setting remote description (offer)");
       await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      addLog("Remote description set");
       
-      // Создаем ответ
-      console.log("Creating answer");
+      // Create answer
+      addLog("Creating answer");
       const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
+      addLog(`Created answer: ${JSON.stringify(answer).substring(0, 100)}...`);
       
-      if (currentChannel) {
-        console.log("Sending answer to:", fromUserId);
-        currentChannel.send({
+      await pc.setLocalDescription(answer);
+      addLog("Local description set");
+      
+      if (signalChannel) {
+        addLog(`Sending answer to: ${fromUserId.substring(0, 8)}...`);
+        signalChannel.send({
           type: 'broadcast',
           event: 'answer',
           payload: {
@@ -402,8 +513,11 @@ const VideoChat: React.FC = () => {
             target: fromUserId
           }
         });
+      } else {
+        addLog("Cannot send answer: missing signalChannel", "warn");
       }
     } catch (error) {
+      addLog(`Error handling offer or creating answer: ${(error as Error).message}`, "error");
       console.error('Error handling offer or creating answer:', error);
     }
   };
@@ -411,30 +525,42 @@ const VideoChat: React.FC = () => {
   const handleAnswer = async (answer: RTCSessionDescriptionInit) => {
     if (peerConnection) {
       try {
-        console.log("Setting remote description (answer)");
+        addLog("Setting remote description (answer)");
         await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+        addLog("Remote description (answer) set successfully");
       } catch (error) {
+        addLog(`Error handling answer: ${(error as Error).message}`, "error");
         console.error('Error handling answer:', error);
       }
+    } else {
+      addLog("Cannot handle answer: no peer connection", "warn");
     }
   };
   
   const handleIceCandidate = async (candidate: RTCIceCandidateInit) => {
     if (peerConnection) {
       try {
-        console.log("Adding ICE candidate:", candidate);
+        addLog(`Adding ICE candidate: ${JSON.stringify(candidate).substring(0, 100)}...`);
         await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+        addLog("ICE candidate added successfully");
       } catch (error) {
+        addLog(`Error adding ICE candidate: ${(error as Error).message}`, "error");
         console.error('Error adding ICE candidate:', error);
       }
+    } else {
+      addLog("Cannot add ICE candidate: no peer connection", "warn");
     }
   };
 
-  const handleDisconnect = () => {
-    console.log("Disconnecting");
+  const handleDisconnect = (forceReset = false) => {
+    addLog(`Disconnecting${forceReset ? ' (forced)' : ''}`);
     setIsConnected(false);
     setIsSearching(true);
-    setConnectionAttempts(0);
+    
+    if (!forceReset) {
+      setConnectionAttempts(0);
+    }
+    
     stopCounter();
     
     if (peerConnection) {
@@ -448,7 +574,7 @@ const VideoChat: React.FC = () => {
     
     toast({
       title: "Соединение разорвано",
-      description: "Собеседник отключился",
+      description: forceReset ? "Не удалось установить соединение" : "Собеседник отключился",
     });
   };
 
@@ -457,7 +583,7 @@ const VideoChat: React.FC = () => {
       const audioTracks = localStreamRef.current.getAudioTracks();
       audioTracks.forEach(track => {
         track.enabled = !track.enabled;
-        console.log(`Audio track ${track.id} ${track.enabled ? 'enabled' : 'disabled'}`);
+        addLog(`Audio track ${track.id} ${track.enabled ? 'enabled' : 'disabled'}`);
       });
       setIsMuted(!isMuted);
     }
@@ -468,7 +594,7 @@ const VideoChat: React.FC = () => {
       const videoTracks = localStreamRef.current.getVideoTracks();
       videoTracks.forEach(track => {
         track.enabled = !track.enabled;
-        console.log(`Video track ${track.id} ${track.enabled ? 'enabled' : 'disabled'}`);
+        addLog(`Video track ${track.id} ${track.enabled ? 'enabled' : 'disabled'}`);
       });
       setIsVideoOff(!isVideoOff);
     }
@@ -502,19 +628,7 @@ const VideoChat: React.FC = () => {
 
   const exitChat = () => {
     stopCounter();
-    
-    if (peerConnection) {
-      peerConnection.close();
-    }
-    
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach(track => track.stop());
-    }
-    
-    if (currentChannel) {
-      supabase.removeChannel(currentChannel);
-    }
-    
+    cleanup();
     navigate('/');
   };
 
@@ -584,7 +698,12 @@ const VideoChat: React.FC = () => {
             </p>
             {connectionAttempts > 0 && (
               <p className="text-yellow-400 mt-2">
-                Попытка соединения: {connectionAttempts}/3
+                Попытка соединения: {connectionAttempts}/5
+              </p>
+            )}
+            {connectionState !== 'new' && (
+              <p className="text-blue-400 mt-2">
+                Состояние соединения: {connectionState}
               </p>
             )}
           </div>
@@ -633,8 +752,36 @@ const VideoChat: React.FC = () => {
           >
             <Maximize2 className="text-white" />
           </Button>
+          
+          <Button 
+            variant="ghost" 
+            size="icon"
+            className="rounded-full bg-gray-800 hover:bg-gray-700 w-12 h-12"
+            onClick={() => setShowDebug(!showDebug)}
+          >
+            <Info className="text-white" />
+          </Button>
         </div>
       </div>
+      
+      {/* Debug overlay */}
+      {showDebug && (
+        <div className="absolute right-4 top-4 bg-black bg-opacity-70 p-2 rounded-lg text-xs text-white w-80 h-60 overflow-auto z-30">
+          <h3 className="font-bold mb-1">Debug Info:</h3>
+          <p>User ID: {currentUserId?.substring(0, 8)}...</p>
+          <p>Online Users: {onlineUsers.length}</p>
+          <p>Connection State: {connectionState}</p>
+          <p>Connection Attempts: {connectionAttempts}</p>
+          <div className="mt-2">
+            <h4 className="font-bold">Logs:</h4>
+            <div className="text-xs h-32 overflow-y-auto">
+              {debugLogs.map((log, i) => (
+                <div key={i} className="text-gray-300">{log}</div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
       
       {/* Exit button */}
       <button 
