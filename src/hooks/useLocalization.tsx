@@ -1,238 +1,211 @@
 
-import { createContext, useContext, useState, ReactNode, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect } from 'react';
 
-// Поддерживаемые языки
 type Language = 'ru' | 'en' | 'zh';
 
-// Интерфейс для контекста локализации
 interface LocalizationContextType {
+  t: (key: string, params?: Record<string, any>) => string;
   language: Language;
   setLanguage: (language: Language) => void;
-  t: (key: string, params?: Record<string, any>) => string;
 }
 
-// Создаем контекст
-const LocalizationContext = createContext<LocalizationContextType | undefined>(undefined);
-
-// Словари для каждого языка
-const translations: Record<Language, Record<string, string>> = {
+const translations = {
   ru: {
-    // Общее
-    back: 'Назад',
-    you: 'Вы',
-    debugInfo: 'Отладочная информация',
-    logs: 'Логи',
-    userId: 'ID пользователя',
-    language: 'Язык',
-    onlineUsers: 'Онлайн пользователей: {count}',
-    fullscreen: 'Полный экран',
-    
-    // Заголовки страниц
+    start: 'Начать',
+    signIn: 'Войти',
+    signUp: 'Регистрация',
+    signOut: 'Выйти',
+    email: 'Электронная почта',
+    password: 'Пароль',
     leaderboard: 'Таблица лидеров',
     startChat: 'Начать чат',
-    signOut: 'Выйти',
-    start: 'Начать',
-    
-    // Поиск и соединение
     searchingPeer: 'Поиск собеседника...',
+    waitingForUsers: 'Ждем других пользователей...',
     foundPotentialPeer: 'Найден подходящий собеседник, устанавливаем соединение...',
-    waitingForUsers: 'Ожидаем других пользователей...',
-    connectionAttempt: 'Попытка соединения с {peer}...: {attempt}/{max}',
-    connectionState: 'Соединение с {peer}...: {state}',
-    connectedPeers: 'Подключенные пользователи',
-    searchingNewPeer: 'Поиск нового собеседника',
-    waitingForConnection: 'Ожидайте подключения...',
-    
-    // Статусы и уведомления
-    connectionEstablished: 'Соединение установлено!',
-    peerConnected: 'Вы подключены к собеседнику',
-    connectionClosed: 'Соединение разорвано',
+    onlineUsers: 'Онлайн пользователей: {count}',
+    connectionAttempt: 'Попытка соединения с {peer}: {attempt}/{max}',
+    connectionState: 'Соединение с {peer}: {state}',
+    connectionFailed: 'Соединение не установлено',
+    connectionFailedDesc: 'Не удалось установить соединение с собеседником',
+    connectionEstablished: 'Соединение установлено',
+    peerConnected: 'Собеседник подключен',
+    connectionClosed: 'Соединение закрыто',
     peerDisconnected: 'Собеседник отключился',
     allPeersDisconnected: 'Все собеседники отключились',
-    userOnline: 'Пользователь онлайн',
-    connectionFailed: 'Не удалось установить соединение',
-    connectionFailedDesc: 'Сетевое соединение не удается установить. Возможно проблемы с NAT или брандмауэром',
     cameraAccessError: 'Ошибка доступа к камере',
-    checkPermissions: 'Проверьте разрешения и попробуйте снова',
+    checkPermissions: 'Проверьте разрешения браузера',
     videoUnavailable: 'Видео недоступно',
-    audioOnlyMode: 'Используется только аудио',
-    authRequired: 'Требуется авторизация',
-    authRequiredDesc: 'Для использования видеочата необходимо войти в систему',
-    
-    // Состояние пустой комнаты
+    audioOnlyMode: 'Режим только аудио',
     noPeersConnected: 'Нет подключенных собеседников',
-    waitingForPeers: 'Ожидаем подключения пользователей...',
+    waitingForPeers: 'Ожидание подключения собеседников...',
+    you: 'Вы',
+    fullscreen: 'Полный экран',
+    debugInfo: 'Отладочная информация',
+    userId: 'ID пользователя',
+    connectedPeers: 'Подключено собеседников',
+    logs: 'Логи',
+    back: 'Назад',
+    searchingNewPeer: 'Поиск нового собеседника',
+    waitingForConnection: 'Ожидание соединения...',
+    user: 'Пользователь',
+    rank: 'Ранг',
+    score: 'Очки',
+    startMatch: 'Начать матч',
+    loadingLeaderboard: 'Загрузка таблицы лидеров...',
+    noUsersFound: 'Пользователи не найдены',
+    leaderboardDescription: 'Лучшие пользователи по количеству очков',
+    error: 'Ошибка',
+    errorFetchingUsers: 'Ошибка при загрузке пользователей',
+    somethingWentWrong: 'Что-то пошло не так',
+    authRequired: 'Требуется авторизация',
+    authRequiredDesc: 'Для доступа к этой странице требуется авторизация',
+    pleaseLoginFirst: 'Пожалуйста, войдите в систему',
+    language: 'Язык'
   },
-  
   en: {
-    // General
-    back: 'Back',
-    you: 'You',
-    debugInfo: 'Debug Information',
-    logs: 'Logs',
-    userId: 'User ID',
-    language: 'Language',
-    onlineUsers: 'Online users: {count}',
-    fullscreen: 'Fullscreen',
-    
-    // Page headers
+    start: 'Start',
+    signIn: 'Sign In',
+    signUp: 'Sign Up',
+    signOut: 'Sign Out',
+    email: 'Email',
+    password: 'Password',
     leaderboard: 'Leaderboard',
     startChat: 'Start Chat',
-    signOut: 'Sign Out',
-    start: 'Start',
-    
-    // Search and connection
-    searchingPeer: 'Searching for conversation partner...',
-    foundPotentialPeer: 'Found a potential match, establishing connection...',
+    searchingPeer: 'Searching for a peer...',
     waitingForUsers: 'Waiting for other users...',
-    connectionAttempt: 'Connection attempt with {peer}...: {attempt}/{max}',
-    connectionState: 'Connection with {peer}...: {state}',
-    connectedPeers: 'Connected peers',
-    searchingNewPeer: 'Searching for new partner',
-    waitingForConnection: 'Waiting for connection...',
-    
-    // Statuses and notifications
-    connectionEstablished: 'Connection established!',
-    peerConnected: 'You are connected to a conversation partner',
-    connectionClosed: 'Connection closed',
-    peerDisconnected: 'Partner disconnected',
-    allPeersDisconnected: 'All partners disconnected',
-    userOnline: 'User online',
+    foundPotentialPeer: 'Found a potential peer, establishing connection...',
+    onlineUsers: 'Online users: {count}',
+    connectionAttempt: 'Connection attempt with {peer}: {attempt}/{max}',
+    connectionState: 'Connection with {peer}: {state}',
     connectionFailed: 'Connection failed',
-    connectionFailedDesc: 'Network connection cannot be established. Possible NAT or firewall issues',
+    connectionFailedDesc: 'Failed to establish connection with peer',
+    connectionEstablished: 'Connection established',
+    peerConnected: 'Peer connected',
+    connectionClosed: 'Connection closed',
+    peerDisconnected: 'Peer disconnected',
+    allPeersDisconnected: 'All peers disconnected',
     cameraAccessError: 'Camera access error',
-    checkPermissions: 'Check permissions and try again',
+    checkPermissions: 'Check browser permissions',
     videoUnavailable: 'Video unavailable',
     audioOnlyMode: 'Audio only mode',
+    noPeersConnected: 'No peers connected',
+    waitingForPeers: 'Waiting for peers to connect...',
+    you: 'You',
+    fullscreen: 'Fullscreen',
+    debugInfo: 'Debug info',
+    userId: 'User ID',
+    connectedPeers: 'Connected peers',
+    logs: 'Logs',
+    back: 'Back',
+    searchingNewPeer: 'Searching for a new peer',
+    waitingForConnection: 'Waiting for connection...',
+    user: 'User',
+    rank: 'Rank',
+    score: 'Score',
+    startMatch: 'Start Match',
+    loadingLeaderboard: 'Loading leaderboard...',
+    noUsersFound: 'No users found',
+    leaderboardDescription: 'Top users by score',
+    error: 'Error',
+    errorFetchingUsers: 'Error fetching users',
+    somethingWentWrong: 'Something went wrong',
     authRequired: 'Authentication required',
-    authRequiredDesc: 'You need to be logged in to use video chat',
-    
-    // Empty room state
-    noPeersConnected: 'No partners connected',
-    waitingForPeers: 'Waiting for users to connect...',
+    authRequiredDesc: 'Authentication is required to access this page',
+    pleaseLoginFirst: 'Please login first',
+    language: 'Language'
   },
-  
   zh: {
-    // 通用
-    back: '返回',
-    you: '您',
-    debugInfo: '调试信息',
-    logs: '日志',
-    userId: '用户ID',
-    language: '语言',
-    onlineUsers: '在线用户: {count}',
-    fullscreen: '全屏',
-    
-    // 页面标题
+    start: '开始',
+    signIn: '登录',
+    signUp: '注册',
+    signOut: '退出',
+    email: '电子邮箱',
+    password: '密码',
     leaderboard: '排行榜',
     startChat: '开始聊天',
-    signOut: '登出',
-    start: '开始',
-    
-    // 搜索和连接
-    searchingPeer: '正在搜索对话伙伴...',
-    foundPotentialPeer: '找到潜在匹配，正在建立连接...',
+    searchingPeer: '搜索对话者...',
     waitingForUsers: '等待其他用户...',
-    connectionAttempt: '与 {peer}... 的连接尝试: {attempt}/{max}',
-    connectionState: '与 {peer}... 的连接状态: {state}',
-    connectedPeers: '已连接的伙伴',
-    searchingNewPeer: '搜索新伙伴',
-    waitingForConnection: '等待连接...',
-    
-    // 状态和通知
-    connectionEstablished: '连接已建立!',
-    peerConnected: '您已连接到对话伙伴',
-    connectionClosed: '连接已关闭',
-    peerDisconnected: '对方已断开连接',
-    allPeersDisconnected: '所有伙伴已断开连接',
-    userOnline: '用户在线',
+    foundPotentialPeer: '找到潜在对话者，正在建立连接...',
+    onlineUsers: '在线用户：{count}',
+    connectionAttempt: '与 {peer} 的连接尝试：{attempt}/{max}',
+    connectionState: '与 {peer} 的连接：{state}',
     connectionFailed: '连接失败',
-    connectionFailedDesc: '无法建立网络连接。可能存在NAT或防火墙问题',
+    connectionFailedDesc: '无法与对话者建立连接',
+    connectionEstablished: '连接已建立',
+    peerConnected: '对话者已连接',
+    connectionClosed: '连接已关闭',
+    peerDisconnected: '对话者已断开连接',
+    allPeersDisconnected: '所有对话者已断开连接',
     cameraAccessError: '相机访问错误',
-    checkPermissions: '检查权限并重试',
+    checkPermissions: '检查浏览器权限',
     videoUnavailable: '视频不可用',
     audioOnlyMode: '仅音频模式',
+    noPeersConnected: '没有连接的对话者',
+    waitingForPeers: '等待对话者连接...',
+    you: '你',
+    fullscreen: '全屏',
+    debugInfo: '调试信息',
+    userId: '用户ID',
+    connectedPeers: '已连接的对话者',
+    logs: '日志',
+    back: '返回',
+    searchingNewPeer: '搜索新的对话者',
+    waitingForConnection: '等待连接...',
+    user: '用户',
+    rank: '排名',
+    score: '分数',
+    startMatch: '开始匹配',
+    loadingLeaderboard: '加载排行榜...',
+    noUsersFound: '未找到用户',
+    leaderboardDescription: '按分数排名的顶级用户',
+    error: '错误',
+    errorFetchingUsers: '获取用户时出错',
+    somethingWentWrong: '出现错误',
     authRequired: '需要认证',
-    authRequiredDesc: '您需要登录才能使用视频聊天',
-    
-    // 空房间状态
-    noPeersConnected: '没有连接的伙伴',
-    waitingForPeers: '等待用户连接...',
+    authRequiredDesc: '访问此页面需要认证',
+    pleaseLoginFirst: '请先登录',
+    language: '语言'
   }
 };
 
-// Форматирование строк с параметрами
-const formatString = (template: string, params?: Record<string, any>): string => {
-  if (!params) return template;
-  
-  return Object.entries(params).reduce((result, [key, value]) => {
-    const regex = new RegExp(`{${key}}`, 'g');
-    return result.replace(regex, String(value));
-  }, template);
-};
+// Create context
+const LocalizationContext = createContext<LocalizationContextType>({
+  t: () => '',
+  language: 'ru',
+  setLanguage: () => {}
+});
 
-// Провайдер локализации
-export const LocalizationProvider: React.FC<{children: ReactNode}> = ({ children }) => {
-  // Используем локальное хранилище для сохранения выбранного языка
-  const [language, setLanguageState] = useState<Language>(() => {
-    // Пытаемся получить сохраненный язык
-    const savedLanguage = localStorage.getItem('language') as Language;
-    // Пытаемся определить язык браузера
-    const browserLanguage = navigator.language.split('-')[0] as Language;
+export const LocalizationProvider: React.FC<{children: React.ReactNode}> = ({ children }) => {
+  const [language, setLanguage] = useState<Language>('ru');
+  
+  // Load saved language preference from localStorage
+  useEffect(() => {
+    const savedLanguage = localStorage.getItem('language') as Language || 'ru';
+    setLanguage(savedLanguage);
+  }, []);
+  
+  // Save language preference to localStorage
+  useEffect(() => {
+    localStorage.setItem('language', language);
+  }, [language]);
+  
+  const t = (key: string, params?: Record<string, any>) => {
+    let text = translations[language][key as keyof typeof translations[typeof language]] || key;
     
-    // Если язык сохранен и он поддерживается, используем его
-    if (savedLanguage && Object.keys(translations).includes(savedLanguage)) {
-      return savedLanguage;
+    if (params) {
+      Object.entries(params).forEach(([param, value]) => {
+        text = text.replace(`{${param}}`, value.toString());
+      });
     }
     
-    // Иначе пытаемся определить язык браузера
-    if (browserLanguage && Object.keys(translations).includes(browserLanguage)) {
-      return browserLanguage;
-    }
-    
-    // По умолчанию используем русский
-    return 'ru';
-  });
-  
-  // Сохраняем выбранный язык в локальное хранилище
-  const setLanguage = (newLanguage: Language) => {
-    localStorage.setItem('language', newLanguage);
-    setLanguageState(newLanguage);
-  };
-  
-  // Функция перевода
-  const t = (key: string, params?: Record<string, any>): string => {
-    const translation = translations[language][key];
-    
-    // Если перевод не найден, возвращаем ключ
-    if (!translation) {
-      console.warn(`Translation not found for key: ${key}`);
-      return key;
-    }
-    
-    return formatString(translation, params);
-  };
-  
-  const value = {
-    language,
-    setLanguage,
-    t,
+    return text;
   };
   
   return (
-    <LocalizationContext.Provider value={value}>
+    <LocalizationContext.Provider value={{ t, language, setLanguage }}>
       {children}
     </LocalizationContext.Provider>
   );
 };
 
-// Хук для использования локализации
-export const useLocalization = (): LocalizationContextType => {
-  const context = useContext(LocalizationContext);
-  
-  if (context === undefined) {
-    throw new Error('useLocalization must be used within a LocalizationProvider');
-  }
-  
-  return context;
-};
+export const useLocalization = () => useContext(LocalizationContext);

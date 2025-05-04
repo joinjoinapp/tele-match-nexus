@@ -121,13 +121,15 @@ const VideoChat: React.FC = () => {
   // Create peer connection and set up event handlers
   const createPeerConnection = (peerId: string) => {
     addLog(`Creating new RTCPeerConnection with peer: ${peerId.substring(0, 8)}...`);
+    
+    // Create a new peer connection with STUN/TURN config
     const pc = new RTCPeerConnection(RTCconfig);
     
     pc.onicecandidate = (event) => {
       if (event.candidate) {
         addLog(`Generated ICE candidate for peer ${peerId.substring(0, 8)}...: ${event.candidate.candidate.substring(0, 50)}...`);
         
-        if (signalChannel) {
+        if (signalChannel && currentUserId) {
           addLog(`Sending ICE candidate to: ${peerId.substring(0, 8)}...`);
           signalChannel.send({
             type: 'broadcast',
@@ -139,7 +141,7 @@ const VideoChat: React.FC = () => {
             }
           });
         } else {
-          addLog("Cannot send ICE candidate: missing signalChannel", "warn");
+          addLog("Cannot send ICE candidate: missing signalChannel or currentUserId", "warn");
         }
       }
     };
@@ -176,7 +178,7 @@ const VideoChat: React.FC = () => {
             variant: "destructive",
           });
         }
-      } else if (pc.iceConnectionState === 'connected') {
+      } else if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
         addLog(`ICE connection established successfully with peer ${peerId.substring(0, 8)}...!`);
         if (!connectedPeers.includes(peerId)) {
           setConnectedPeers(prev => [...prev, peerId]);
@@ -210,9 +212,11 @@ const VideoChat: React.FC = () => {
       // Get the video element for this peer
       const videoElement = document.getElementById(`remote-video-${peerId}`) as HTMLVideoElement;
       
-      if (videoElement && event.streams[0]) {
+      if (videoElement && event.streams && event.streams[0]) {
         addLog(`Setting remote video stream for peer ${peerId.substring(0, 8)}...`);
         videoElement.srcObject = event.streams[0];
+        videoElement.play().catch(e => addLog(`Error playing remote video: ${e.message}`, "error"));
+        
         setIsSearching(false);
         setIsConnected(true);
         
@@ -236,6 +240,7 @@ const VideoChat: React.FC = () => {
     
     // Add local stream to the peer connection
     if (localStreamRef.current) {
+      addLog(`Adding local stream tracks to peer connection for peer ${peerId.substring(0, 8)}...`);
       localStreamRef.current.getTracks().forEach(track => {
         if (localStreamRef.current) {
           addLog(`Adding ${track.kind} track to peer connection for peer ${peerId.substring(0, 8)}...`);
@@ -244,6 +249,17 @@ const VideoChat: React.FC = () => {
       });
     } else {
       addLog(`No local stream available for peer ${peerId.substring(0, 8)}...`, "warn");
+      // Try to initialize media first and retry
+      setupMediaDevices().then(() => {
+        if (localStreamRef.current) {
+          localStreamRef.current.getTracks().forEach(track => {
+            if (localStreamRef.current) {
+              addLog(`Adding ${track.kind} track after init to peer connection for peer ${peerId.substring(0, 8)}...`);
+              pc.addTrack(track, localStreamRef.current);
+            }
+          });
+        }
+      });
     }
     
     return pc;
@@ -412,6 +428,9 @@ const VideoChat: React.FC = () => {
           await channel.track({ online_at: new Date().toISOString() })
             .then(() => addLog("Presence tracked successfully"))
             .catch(error => addLog(`Error tracking presence: ${error.message}`, "error"));
+          
+          // Setup media devices after presence is established
+          await setupMediaDevices();
         }
       });
     
@@ -451,9 +470,6 @@ const VideoChat: React.FC = () => {
     
     setCurrentChannel(channel);
     setSignalChannel(signalChan);
-    
-    // Setup media devices
-    setupMediaDevices();
   };
   
   const setupMediaDevices = async () => {
@@ -508,8 +524,14 @@ const VideoChat: React.FC = () => {
         stream.getTracks().forEach(track => {
           pc.addTrack(track, stream);
         });
+        
+        // Renegotiate if needed after track change
+        if (currentUserId && currentUserId < peerId) {
+          renegotiateConnection(pc, peerId);
+        }
       });
       
+      return stream;
     } catch (error: any) {
       addLog(`Error accessing media devices: ${error.message}`, "error");
       console.error('Error accessing media devices:', error);
@@ -531,9 +553,34 @@ const VideoChat: React.FC = () => {
           title: t('videoUnavailable'),
           description: t('audioOnlyMode'),
         });
+        
+        return audioStream;
       } catch (audioError) {
         addLog(`Failed to get even audio: ${(audioError as any).message}`, "error");
+        throw audioError;
       }
+    }
+  };
+  
+  const renegotiateConnection = async (pc: RTCPeerConnection, peerId: string) => {
+    try {
+      addLog(`Renegotiating connection with peer ${peerId.substring(0, 8)}...`);
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      
+      if (signalChannel && currentUserId) {
+        signalChannel.send({
+          type: 'broadcast',
+          event: 'offer',
+          payload: {
+            offer: offer,
+            from: currentUserId,
+            target: peerId
+          }
+        });
+      }
+    } catch (error) {
+      addLog(`Error renegotiating connection: ${(error as Error).message}`, "error");
     }
   };
   
@@ -594,6 +641,16 @@ const VideoChat: React.FC = () => {
   
   const handleOffer = async (offer: RTCSessionDescriptionInit, fromUserId: string) => {
     addLog(`Handling offer from peer: ${fromUserId.substring(0, 8)}...`);
+    
+    // Ensure we have local media before answering
+    if (!localStreamRef.current) {
+      addLog("Local media not initialized, setting up before answering offer", "warn");
+      try {
+        await setupMediaDevices();
+      } catch (error) {
+        addLog(`Failed to set up media before answering: ${(error as Error).message}`, "error");
+      }
+    }
     
     // Create or get the peer connection
     let pc = peerConnections.get(fromUserId);
