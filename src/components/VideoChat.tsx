@@ -68,11 +68,14 @@ const VideoChat: React.FC = () => {
     videoDevice: string | null,
     audioDevice: string | null
   }>({ videoDevice: null, audioDevice: null });
-
+  const [mediaInitialized, setMediaInitialized] = useState(false);
+  const [isWaitingForConnection, setIsWaitingForConnection] = useState(false);
+  
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideosRef = useRef<Map<string, HTMLVideoElement | null>>(new Map());
   const localStreamRef = useRef<MediaStream | null>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const pendingConnectionsRef = useRef<string[]>([]);
   const navigate = useNavigate();
   const { toast } = useToast();
   const { user } = useAuth();
@@ -115,6 +118,128 @@ const VideoChat: React.FC = () => {
     if (timerRef.current) {
       clearInterval(timerRef.current);
       timerRef.current = null;
+    }
+  };
+
+  // Setup media devices first, before any peer connections
+  useEffect(() => {
+    const initializeMedia = async () => {
+      try {
+        await setupMediaDevices();
+        setMediaInitialized(true);
+        addLog("Media devices initialized successfully");
+      } catch (error) {
+        addLog(`Error initializing media: ${(error as Error).message}`, "error");
+      }
+    };
+    
+    initializeMedia();
+    
+    return () => {
+      if (localStreamRef.current) {
+        localStreamRef.current.getTracks().forEach(track => track.stop());
+        localStreamRef.current = null;
+      }
+    };
+  }, []);
+
+  // Setup user presence and signaling after media is initialized
+  useEffect(() => {
+    const checkSession = async () => {
+      if (!user) {
+        addLog("No authenticated user, redirecting to login", "warn");
+        navigate('/');
+        toast({
+          title: t('authRequired'),
+          description: t('authRequiredDesc'),
+          variant: "destructive",
+        });
+        return;
+      }
+      
+      setCurrentUserId(user.id);
+      addLog(`Current user authenticated: ${user.id.substring(0, 8)}...`);
+      
+      // Setup presence
+      if (mediaInitialized) {
+        setupPresence(user.id);
+      } else {
+        addLog("Waiting for media initialization before setting up presence", "warn");
+      }
+      
+      // Enumerate devices
+      enumerateDevices();
+    };
+    
+    if (mediaInitialized) {
+      checkSession();
+    }
+    
+    return () => {
+      cleanup();
+    };
+  }, [user, navigate, language, mediaInitialized]);
+  
+  // Enumerate available media devices
+  const enumerateDevices = async () => {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      
+      const videoDevices = devices.filter(device => device.kind === 'videoinput');
+      const audioDevices = devices.filter(device => device.kind === 'audioinput');
+      
+      addLog(`Found ${videoDevices.length} video devices and ${audioDevices.length} audio devices`);
+      
+      setAvailableDevices({
+        videoDevices,
+        audioDevices
+      });
+      
+      // Set default devices if not set already
+      if (!selectedDevices.videoDevice && videoDevices.length > 0) {
+        setSelectedDevices(prev => ({
+          ...prev,
+          videoDevice: videoDevices[0].deviceId
+        }));
+      }
+      
+      if (!selectedDevices.audioDevice && audioDevices.length > 0) {
+        setSelectedDevices(prev => ({
+          ...prev,
+          audioDevice: audioDevices[0].deviceId
+        }));
+      }
+    } catch (error) {
+      addLog(`Error enumerating devices: ${(error as Error).message}`, "error");
+    }
+  };
+  
+  const cleanup = () => {
+    addLog("Cleaning up resources");
+    
+    if (currentChannel) {
+      addLog("Removing presence channel");
+      supabase.removeChannel(currentChannel);
+    }
+    
+    if (signalChannel) {
+      addLog("Removing signal channel");
+      supabase.removeChannel(signalChannel);
+    }
+    
+    // Close all peer connections
+    peerConnections.forEach((pc, peerId) => {
+      addLog(`Closing peer connection with ${peerId.substring(0, 8)}...`);
+      pc.close();
+    });
+    
+    setPeerConnections(new Map());
+    
+    stopCounter();
+    
+    if (localStreamRef.current) {
+      addLog("Stopping local media tracks");
+      localStreamRef.current.getTracks().forEach(track => track.stop());
     }
   };
 
@@ -185,6 +310,7 @@ const VideoChat: React.FC = () => {
         }
         setIsSearching(false);
         setIsConnected(true);
+        setIsWaitingForConnection(false);
         
         // Start counter only once when the first peer is connected
         if (connectedPeers.length === 0) {
@@ -209,16 +335,72 @@ const VideoChat: React.FC = () => {
     pc.ontrack = (event) => {
       addLog(`Received remote track from peer ${peerId.substring(0, 8)}...: ${event.track.kind}`);
       
-      // Get the video element for this peer
-      const videoElement = document.getElementById(`remote-video-${peerId}`) as HTMLVideoElement;
+      // Create or get the video element for this peer
+      let videoElement = document.getElementById(`remote-video-${peerId}`) as HTMLVideoElement;
+      
+      if (!videoElement) {
+        addLog(`Creating new video element for peer ${peerId.substring(0, 8)}...`);
+        videoElement = document.createElement('video');
+        videoElement.id = `remote-video-${peerId}`;
+        videoElement.autoplay = true;
+        videoElement.playsInline = true;
+        
+        // Add to the remote video container
+        const container = document.querySelector('.video-container');
+        if (container) {
+          const videoWrapper = document.createElement('div');
+          videoWrapper.id = `remote-video-wrapper-${peerId}`;
+          videoWrapper.className = 'relative aspect-video bg-gray-900 rounded-lg overflow-hidden';
+          videoWrapper.appendChild(videoElement);
+          
+          // Add peer ID indicator
+          const peerIdIndicator = document.createElement('div');
+          peerIdIndicator.className = 'absolute bottom-2 left-2 bg-black bg-opacity-50 px-2 py-1 rounded-md text-white text-xs';
+          peerIdIndicator.textContent = `${peerId.substring(0, 8)}...`;
+          videoWrapper.appendChild(peerIdIndicator);
+          
+          // Add fullscreen button
+          const fullscreenBtn = document.createElement('button');
+          fullscreenBtn.className = 'absolute top-2 right-2 bg-black bg-opacity-50 p-1 rounded-full';
+          fullscreenBtn.title = t('fullscreen');
+          fullscreenBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-white"><polyline points="15 3 21 3 21 9"></polyline><polyline points="9 21 3 21 3 15"></polyline><line x1="21" y1="3" x2="14" y2="10"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>';
+          fullscreenBtn.onclick = () => fullscreenVideo(peerId);
+          videoWrapper.appendChild(fullscreenBtn);
+          
+          container.appendChild(videoWrapper);
+        }
+      }
       
       if (videoElement && event.streams && event.streams[0]) {
         addLog(`Setting remote video stream for peer ${peerId.substring(0, 8)}...`);
+        
+        // Store the reference to the video element
+        remoteVideosRef.current.set(peerId, videoElement);
+        
+        // Set the stream as the source for the video element
         videoElement.srcObject = event.streams[0];
-        videoElement.play().catch(e => addLog(`Error playing remote video: ${e.message}`, "error"));
+        
+        // Ensure the video plays
+        videoElement.play().catch(e => {
+          addLog(`Error playing remote video: ${e.message}`, "error");
+          
+          // Try again with user interaction
+          const playPromise = videoElement.play();
+          if (playPromise !== undefined) {
+            playPromise.catch(() => {
+              // Show play button or message to user
+              toast({
+                title: t('videoPlaybackError'),
+                description: t('tapToPlayVideo'),
+                action: <Button onClick={() => videoElement.play()}>{t('play')}</Button>
+              });
+            });
+          }
+        });
         
         setIsSearching(false);
         setIsConnected(true);
+        setIsWaitingForConnection(false);
         
         // If this is our first connection, start the counter
         if (connectedPeers.length === 0) {
@@ -249,114 +431,11 @@ const VideoChat: React.FC = () => {
       });
     } else {
       addLog(`No local stream available for peer ${peerId.substring(0, 8)}...`, "warn");
-      // Try to initialize media first and retry
-      setupMediaDevices().then(() => {
-        if (localStreamRef.current) {
-          localStreamRef.current.getTracks().forEach(track => {
-            if (localStreamRef.current) {
-              addLog(`Adding ${track.kind} track after init to peer connection for peer ${peerId.substring(0, 8)}...`);
-              pc.addTrack(track, localStreamRef.current);
-            }
-          });
-        }
-      });
+      // Add to pending connections to initialize later when media is ready
+      pendingConnectionsRef.current.push(peerId);
     }
     
     return pc;
-  };
-
-  // Setup user presence and signaling
-  useEffect(() => {
-    const checkSession = async () => {
-      if (!user) {
-        addLog("No authenticated user, redirecting to login", "warn");
-        navigate('/');
-        toast({
-          title: t('authRequired'),
-          description: t('authRequiredDesc'),
-          variant: "destructive",
-        });
-        return;
-      }
-      
-      setCurrentUserId(user.id);
-      addLog(`Current user authenticated: ${user.id.substring(0, 8)}...`);
-      
-      // Setup presence
-      setupPresence(user.id);
-      
-      // Enumerate devices
-      enumerateDevices();
-    };
-    
-    checkSession();
-    
-    return () => {
-      cleanup();
-    };
-  }, [user, navigate, language]);
-  
-  // Enumerate available media devices
-  const enumerateDevices = async () => {
-    try {
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      
-      const videoDevices = devices.filter(device => device.kind === 'videoinput');
-      const audioDevices = devices.filter(device => device.kind === 'audioinput');
-      
-      addLog(`Found ${videoDevices.length} video devices and ${audioDevices.length} audio devices`);
-      
-      setAvailableDevices({
-        videoDevices,
-        audioDevices
-      });
-      
-      // Set default devices if not set already
-      if (!selectedDevices.videoDevice && videoDevices.length > 0) {
-        setSelectedDevices(prev => ({
-          ...prev,
-          videoDevice: videoDevices[0].deviceId
-        }));
-      }
-      
-      if (!selectedDevices.audioDevice && audioDevices.length > 0) {
-        setSelectedDevices(prev => ({
-          ...prev,
-          audioDevice: audioDevices[0].deviceId
-        }));
-      }
-    } catch (error) {
-      addLog(`Error enumerating devices: ${(error as Error).message}`, "error");
-    }
-  };
-  
-  const cleanup = () => {
-    addLog("Cleaning up resources");
-    
-    if (currentChannel) {
-      addLog("Removing presence channel");
-      supabase.removeChannel(currentChannel);
-    }
-    
-    if (signalChannel) {
-      addLog("Removing signal channel");
-      supabase.removeChannel(signalChannel);
-    }
-    
-    // Close all peer connections
-    peerConnections.forEach((pc, peerId) => {
-      addLog(`Closing peer connection with ${peerId.substring(0, 8)}...`);
-      pc.close();
-    });
-    
-    setPeerConnections(new Map());
-    
-    stopCounter();
-    
-    if (localStreamRef.current) {
-      addLog("Stopping local media tracks");
-      localStreamRef.current.getTracks().forEach(track => track.stop());
-    }
   };
   
   const setupPresence = (userId: string) => {
@@ -383,6 +462,7 @@ const VideoChat: React.FC = () => {
         
         if (otherUsers.length > 0) {
           addLog(`Other users online: ${otherUsers.length}`);
+          setIsWaitingForConnection(true);
           
           // Check for new users to connect to
           otherUsers.forEach(otherId => {
@@ -409,6 +489,8 @@ const VideoChat: React.FC = () => {
           description: `ID: ${key.substring(0, 8)}...`,
         });
         
+        setIsWaitingForConnection(true);
+        
         // If new user joined, initiate call if we're the initiator
         if (key !== userId) {
           const isInitiator = userId < key;
@@ -428,9 +510,6 @@ const VideoChat: React.FC = () => {
           await channel.track({ online_at: new Date().toISOString() })
             .then(() => addLog("Presence tracked successfully"))
             .catch(error => addLog(`Error tracking presence: ${error.message}`, "error"));
-          
-          // Setup media devices after presence is established
-          await setupMediaDevices();
         }
       });
     
@@ -506,8 +585,33 @@ const VideoChat: React.FC = () => {
         localVideoRef.current.srcObject = stream;
         localVideoRef.current.muted = true; // Always mute local video to prevent echo
         addLog("Local video stream set up successfully");
+        
+        // Ensure the video plays
+        try {
+          await localVideoRef.current.play();
+        } catch (error) {
+          addLog(`Error playing local video: ${(error as Error).message}`, "warn");
+        }
       } else {
         addLog("No local video element reference available", "warn");
+      }
+      
+      // Process any pending connections that were waiting for media
+      if (pendingConnectionsRef.current.length > 0) {
+        addLog(`Processing ${pendingConnectionsRef.current.length} pending connections`);
+        
+        pendingConnectionsRef.current.forEach(peerId => {
+          const pc = peerConnections.get(peerId);
+          if (pc) {
+            // Add tracks to the existing connection
+            stream.getTracks().forEach(track => {
+              pc.addTrack(track, stream);
+            });
+          }
+        });
+        
+        // Clear pending connections
+        pendingConnectionsRef.current = [];
       }
       
       // Update peer connections with new tracks if already connected
@@ -605,7 +709,7 @@ const VideoChat: React.FC = () => {
     });
     
     // If initiator, create and send offer
-    if (isInitiator && currentUserId) {
+    if (isInitiator && currentUserId && localStreamRef.current) {
       try {
         addLog(`Creating offer as initiator for peer ${peerId.substring(0, 8)}...`);
         const offer = await pc.createOffer({
@@ -636,6 +740,8 @@ const VideoChat: React.FC = () => {
         addLog(`Error creating or sending offer to peer ${peerId.substring(0, 8)}...: ${(error as Error).message}`, "error");
         console.error('Error creating offer:', error);
       }
+    } else if (!localStreamRef.current) {
+      addLog(`Cannot create offer: local stream not ready for peer ${peerId.substring(0, 8)}...`, "warn");
     }
   };
   
@@ -747,6 +853,15 @@ const VideoChat: React.FC = () => {
       pc.close();
     }
     
+    // Remove the video element from DOM if it exists
+    const videoWrapper = document.getElementById(`remote-video-wrapper-${peerId}`);
+    if (videoWrapper) {
+      videoWrapper.remove();
+    }
+    
+    // Remove references
+    remoteVideosRef.current.delete(peerId);
+    
     // Remove from connected peers
     setConnectedPeers(prev => prev.filter(id => id !== peerId));
     
@@ -776,6 +891,7 @@ const VideoChat: React.FC = () => {
       stopCounter();
       setIsConnected(false);
       setIsSearching(true);
+      setIsWaitingForConnection(false);
       
       toast({
         title: t('connectionClosed'),
@@ -786,6 +902,17 @@ const VideoChat: React.FC = () => {
 
   const handleFullDisconnect = (forceReset = false) => {
     addLog(`Full disconnection${forceReset ? ' (forced)' : ''}`);
+    
+    // Remove all video elements
+    peerConnections.forEach((_, peerId) => {
+      const videoWrapper = document.getElementById(`remote-video-wrapper-${peerId}`);
+      if (videoWrapper) {
+        videoWrapper.remove();
+      }
+    });
+    
+    // Clear references
+    remoteVideosRef.current = new Map();
     
     // Close all peer connections
     peerConnections.forEach((pc, peerId) => {
@@ -799,6 +926,7 @@ const VideoChat: React.FC = () => {
     setConnectedPeers([]);
     setIsConnected(false);
     setIsSearching(true);
+    setIsWaitingForConnection(false);
     
     stopCounter();
     
@@ -865,6 +993,7 @@ const VideoChat: React.FC = () => {
   const findNextPeer = () => {
     handleFullDisconnect();
     setIsSearching(true);
+    setIsWaitingForConnection(false);
     
     toast({
       title: t('searchingNewPeer'),
@@ -898,28 +1027,7 @@ const VideoChat: React.FC = () => {
               </div>
             </div>
           </div>
-        ) : (
-          connectedPeers.map(peerId => (
-            <div key={peerId} className="relative aspect-video bg-gray-900 rounded-lg overflow-hidden">
-              <video
-                id={`remote-video-${peerId}`}
-                autoPlay
-                playsInline
-                className="w-full h-full object-cover"
-              />
-              <div className="absolute bottom-2 left-2 bg-black bg-opacity-50 px-2 py-1 rounded-md text-white text-xs">
-                {peerId.substring(0, 8)}...
-              </div>
-              <button
-                onClick={() => fullscreenVideo(peerId)}
-                className="absolute top-2 right-2 bg-black bg-opacity-50 p-1 rounded-full"
-                title={t('fullscreen')}
-              >
-                <Maximize2 size={16} className="text-white" />
-              </button>
-            </div>
-          ))
-        )}
+        ) : null}
       </div>
       
       {/* Local Video (small overlay) */}
@@ -963,7 +1071,7 @@ const VideoChat: React.FC = () => {
             </div>
             <p className="text-2xl font-bold text-white">{t('searchingPeer')}</p>
             <p className="text-gray-400 mt-2">
-              {onlineUsers.length > 1 
+              {isWaitingForConnection 
                 ? t('foundPotentialPeer')
                 : t('waitingForUsers')}
             </p>
