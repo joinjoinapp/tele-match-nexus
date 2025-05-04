@@ -20,54 +20,47 @@ const Leaderboard: React.FC = () => {
   const { t } = useLocalization();
   const navigate = useNavigate();
   const { toast } = useToast();
-  const { user, isAuthenticated } = useAuth();
+  const { user, session } = useAuth();
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
 
   const fetchUsers = async () => {
     setLoading(true);
     try {
-      // Fetch real users from the auth.users table via Supabase
-      const { data: authUsers, error: authError } = await supabase
-        .from('users')
-        .select('id, email, user_metadata')
-        .order('created_at', { ascending: false })
-        .limit(10);
+      // Since we can't directly query users table, we'll create mock leaderboard data
+      // based on authenticated users we know about
+      let leaderboardUsers: User[] = [];
       
-      if (authError) {
-        console.error('Error fetching users:', authError);
-        toast({
-          title: t('error'),
-          description: t('errorFetchingUsers'),
-          variant: 'destructive',
-        });
-        setLoading(false);
-        return;
-      }
-
-      // Transform user data for leaderboard
-      const leaderboardUsers = authUsers.map((authUser, index) => {
-        const username = authUser.email || 
-                        (authUser.user_metadata?.username) || 
-                        (authUser.user_metadata?.name) || 
-                        `${t('user')} ${index + 1}`;
-        
-        // Calculate a score based on some factor (e.g., user ID)
-        // In a real app, you would have a separate scores table
-        const score = Math.floor(Math.random() * 1000) + 100;
-        
-        return {
-          id: authUser.id,
-          username: username,
-          score: score,
-          rank: index + 1,
-          isCurrentUser: user?.id === authUser.id,
+      // If current user is authenticated, include them
+      if (user) {
+        const currentUser = {
+          id: user.id,
+          username: user.email || t('currentUser'),
+          score: Math.floor(Math.random() * 1000) + 500, // Higher score for current user
+          rank: 1,
+          isCurrentUser: true
         };
-      }).sort((a, b) => b.score - a.score)
-        .map((user, index) => ({
-          ...user,
-          rank: index + 1
-        }));
+        leaderboardUsers.push(currentUser);
+      }
+      
+      // Add some mock users to demonstrate the leaderboard
+      const mockUsernames = ['Alex', 'Maria', 'John', 'Wei', 'Ivan', 'Zhang', 'Elena', 'Michael', 'Sophia'];
+      const additionalUsers = mockUsernames.map((name, index) => ({
+        id: `mock-${index}`,
+        username: name,
+        score: Math.floor(Math.random() * 900) + 100,
+        rank: index + 2, // Start from 2 since current user is 1
+        isCurrentUser: false
+      }));
+      
+      leaderboardUsers = [...leaderboardUsers, ...additionalUsers];
+      
+      // Sort by score and update ranks
+      leaderboardUsers.sort((a, b) => b.score - a.score);
+      leaderboardUsers = leaderboardUsers.map((user, index) => ({
+        ...user,
+        rank: index + 1
+      }));
       
       setUsers(leaderboardUsers);
     } catch (error) {
@@ -87,7 +80,7 @@ const Leaderboard: React.FC = () => {
   }, [user]);
 
   const handleAuthClick = () => {
-    if (isAuthenticated) {
+    if (session) {
       navigate('/video-chat');
     } else {
       // Handle authentication required toast
@@ -101,7 +94,7 @@ const Leaderboard: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-900 to-black text-white">
-      <Header isAuthenticated={isAuthenticated} onAuthClick={handleAuthClick} />
+      <Header isAuthenticated={!!session} onAuthClick={handleAuthClick} />
       
       <div className="container mx-auto px-4 py-24">
         <div className="text-center mb-10">
