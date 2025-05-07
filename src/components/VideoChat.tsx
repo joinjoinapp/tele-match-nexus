@@ -70,6 +70,7 @@ const VideoChat: React.FC = () => {
   }>({ videoDevice: null, audioDevice: null });
   const [mediaInitialized, setMediaInitialized] = useState(false);
   const [isWaitingForConnection, setIsWaitingForConnection] = useState(false);
+  const [localVideoActive, setLocalVideoActive] = useState(false);
   
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideosRef = useRef<Map<string, HTMLVideoElement | null>>(new Map());
@@ -125,11 +126,17 @@ const VideoChat: React.FC = () => {
   useEffect(() => {
     const initializeMedia = async () => {
       try {
+        addLog("Initializing media devices...");
         await setupMediaDevices();
         setMediaInitialized(true);
         addLog("Media devices initialized successfully");
       } catch (error) {
         addLog(`Error initializing media: ${(error as Error).message}`, "error");
+        // Retry after a delay
+        setTimeout(() => {
+          addLog("Retrying media initialization...");
+          initializeMedia();
+        }, 2000);
       }
     };
     
@@ -179,6 +186,32 @@ const VideoChat: React.FC = () => {
       cleanup();
     };
   }, [user, navigate, language, mediaInitialized]);
+  
+  // Monitor local video element to ensure it's displaying correctly
+  useEffect(() => {
+    if (localVideoRef.current && localStreamRef.current && !localVideoActive) {
+      const videoElement = localVideoRef.current;
+      
+      // Check if srcObject is set
+      if (!videoElement.srcObject) {
+        addLog("Setting local video srcObject");
+        videoElement.srcObject = localStreamRef.current;
+      }
+      
+      // Play the video if it's not already playing
+      if (videoElement.paused) {
+        addLog("Attempting to play local video");
+        videoElement.play().then(() => {
+          addLog("Local video playing");
+          setLocalVideoActive(true);
+        }).catch(err => {
+          addLog(`Error playing local video: ${err.message}`, "error");
+        });
+      } else {
+        setLocalVideoActive(true);
+      }
+    }
+  }, [localVideoActive, mediaInitialized]);
   
   // Enumerate available media devices
   const enumerateDevices = async () => {
@@ -589,8 +622,22 @@ const VideoChat: React.FC = () => {
         // Ensure the video plays
         try {
           await localVideoRef.current.play();
+          setLocalVideoActive(true);
+          addLog("Local video is now playing");
         } catch (error) {
           addLog(`Error playing local video: ${(error as Error).message}`, "warn");
+          // Add a click handler to the video element to assist with autoplay restrictions
+          if (localVideoRef.current) {
+            localVideoRef.current.onclick = async () => {
+              try {
+                await localVideoRef.current?.play();
+                setLocalVideoActive(true);
+                addLog("Local video playing after user interaction");
+              } catch (err) {
+                addLog(`Still couldn't play local video: ${(err as Error).message}`, "error");
+              }
+            };
+          }
         }
       } else {
         addLog("No local video element reference available", "warn");
@@ -691,6 +738,17 @@ const VideoChat: React.FC = () => {
   const initiateCallWithPeer = async (peerId: string, isInitiator: boolean) => {
     addLog(`Initiating call with peer ${peerId.substring(0, 8)}... as ${isInitiator ? 'initiator' : 'receiver'}`);
     
+    // First, make sure media is initialized
+    if (!localStreamRef.current) {
+      addLog("Local stream not available, initializing media before call", "warn");
+      try {
+        await setupMediaDevices();
+      } catch (error) {
+        addLog(`Failed to set up media: ${(error as Error).message}`, "error");
+        return;
+      }
+    }
+    
     // Create new RTC connection for this peer
     const pc = createPeerConnection(peerId);
     
@@ -755,6 +813,7 @@ const VideoChat: React.FC = () => {
         await setupMediaDevices();
       } catch (error) {
         addLog(`Failed to set up media before answering: ${(error as Error).message}`, "error");
+        return; // Don't proceed if we can't get media
       }
     }
     
@@ -841,6 +900,14 @@ const VideoChat: React.FC = () => {
       }
     } else {
       addLog(`Cannot add ICE candidate: no peer connection for peer ${fromUserId.substring(0, 8)}...`, "warn");
+      
+      // If we receive an ICE candidate but don't have a connection yet,
+      // it's possible we missed the offer. Try to initiate a connection
+      // if we're supposed to be the initiator
+      if (currentUserId && currentUserId < fromUserId) {
+        addLog(`Attempting to initiate connection with ${fromUserId.substring(0, 8)}... after receiving ICE without connection`);
+        initiateCallWithPeer(fromUserId, true);
+      }
     }
   };
 
@@ -1014,6 +1081,24 @@ const VideoChat: React.FC = () => {
     };
   };
 
+  const restartLocalVideo = async () => {
+    addLog("Manually restarting local video");
+    
+    if (!localVideoActive && localVideoRef.current && localStreamRef.current) {
+      localVideoRef.current.srcObject = localStreamRef.current;
+      try {
+        await localVideoRef.current.play();
+        setLocalVideoActive(true);
+        addLog("Local video restarted successfully");
+      } catch (error) {
+        addLog(`Error restarting local video: ${(error as Error).message}`, "error");
+      }
+    } else if (!localStreamRef.current) {
+      addLog("No local stream available, trying to reinitialize media");
+      await setupMediaDevices();
+    }
+  };
+
   return (
     <div className="relative h-screen w-screen bg-black overflow-hidden">
       {/* Remote Videos Grid */}
@@ -1038,7 +1123,15 @@ const VideoChat: React.FC = () => {
           playsInline 
           muted 
           className="w-full h-full object-cover"
+          onClick={restartLocalVideo}
         />
+        {!localVideoActive && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50">
+            <Button onClick={restartLocalVideo} variant="outline" size="sm">
+              {t('enableCamera')}
+            </Button>
+          </div>
+        )}
         <div className="absolute top-1 right-1 bg-black bg-opacity-50 px-1 py-0.5 rounded text-white text-xs">
           {t('you')}
         </div>
@@ -1098,6 +1191,22 @@ const VideoChat: React.FC = () => {
                 ))}
               </div>
             )}
+
+            {/* Media status */}
+            <div className="mt-4">
+              <p className="text-white">
+                {t('mediaStatus')}: 
+                <span className={localVideoActive ? "text-green-400" : "text-red-400"}>
+                  {localVideoActive ? ` ${t('active')}` : ` ${t('inactive')}`}
+                </span>
+              </p>
+              
+              {!localVideoActive && (
+                <Button onClick={restartLocalVideo} variant="outline" size="sm" className="mt-2">
+                  {t('tryAgain')}
+                </Button>
+              )}
+            </div>
           </div>
         </div>
       )}
