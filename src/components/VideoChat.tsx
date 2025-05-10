@@ -1,4 +1,3 @@
-
 import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
@@ -1097,6 +1096,18 @@ const VideoChat: React.FC = () => {
       addLog("No local stream available, trying to reinitialize media");
       await setupMediaDevices();
     }
+  };
+
+  const handleMatch = () => {
+    toast("Совпадение найдено!");
+  };
+
+  const handleEndCall = () => {
+    toast("Звонок завершен");
+  };
+
+  const handleHangUp = () => {
+    toast("Звонок завершен");
   };
 
   return (

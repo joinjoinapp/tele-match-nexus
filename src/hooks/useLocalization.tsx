@@ -1,10 +1,41 @@
-import { useState, useEffect } from 'react';
+
+import { useState, useEffect, createContext, useContext, ReactNode } from 'react';
 
 type Language = 'ru' | 'en' | 'zh';
 
 const getInitialLanguage = (): Language => {
   const storedLanguage = localStorage.getItem('language') as Language;
   return storedLanguage || (navigator.language.startsWith('ru') ? 'ru' : 'en');
+};
+
+type LocalizationContextType = {
+  t: (key: string) => string;
+  language: Language;
+  setLanguage: (lang: Language) => void;
+};
+
+const LocalizationContext = createContext<LocalizationContextType | undefined>(undefined);
+
+interface LocalizationProviderProps {
+  children: ReactNode;
+}
+
+export const LocalizationProvider: React.FC<LocalizationProviderProps> = ({ children }) => {
+  const localization = useLocalization();
+  
+  return (
+    <LocalizationContext.Provider value={localization}>
+      {children}
+    </LocalizationContext.Provider>
+  );
+};
+
+export const useLocalizationContext = (): LocalizationContextType => {
+  const context = useContext(LocalizationContext);
+  if (context === undefined) {
+    throw new Error('useLocalizationContext must be used within a LocalizationProvider');
+  }
+  return context;
 };
 
 export const useLocalization = () => {
