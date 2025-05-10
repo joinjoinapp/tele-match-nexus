@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -42,8 +43,8 @@ const Profile = () => {
 
   const handleTonConnect = (address: string) => {
     setWalletAddress(address);
-    toast({
-      title: 'Кошелек подключен',
+    // Fix: Using the correct toast format for sonner
+    toast("Кошелек подключен", {
       description: `${address} успешно привязан к профилю`,
     });
   };
