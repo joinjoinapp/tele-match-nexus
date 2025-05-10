@@ -6,6 +6,7 @@ import Header from './Header';
 import AuthModal from './AuthModal';
 import { useAuth } from '@/hooks/useAuth';
 import TonConnectButton from './TonConnectButton';
+import { UserIcon, Users } from 'lucide-react';
 
 const HomePage: React.FC = () => {
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
@@ -54,25 +55,35 @@ const HomePage: React.FC = () => {
           <p className="text-xl md:text-2xl text-gray-300 mb-8">
             Общайтесь со случайными людьми через видеочат и зарабатывайте токен $match за каждую секунду общения
           </p>
-          <div className="flex flex-col sm:flex-row justify-center lg:justify-start space-y-4 sm:space-y-0 sm:space-x-4 mb-4">
+          
+          {/* Main action buttons */}
+          <div className="flex flex-col sm:flex-row justify-center lg:justify-start gap-4 mb-8">
             <Button 
-              className="bg-primary hover:bg-primary/90 py-6 px-8 text-lg"
+              className="bg-primary hover:bg-primary/90 py-6 px-8 text-lg gap-2"
               onClick={handleAuthClick}
             >
+              <UserIcon className="w-5 h-5" />
               {user ? 'Начать чат' : 'Начать'}
             </Button>
             <Button 
               variant="outline" 
-              className="border-gray-700 hover:bg-gray-800 py-6 px-8 text-lg"
+              className="border-gray-700 hover:bg-gray-800 py-6 px-8 text-lg gap-2"
               onClick={() => navigate('/leaderboard')}
             >
+              <Users className="w-5 h-5" />
               Таблица лидеров
             </Button>
           </div>
           
-          {/* TON Connect Button */}
-          <div className="mt-6">
-            <TonConnectButton onConnect={handleTonConnect} />
+          {/* TON Connect section */}
+          <div className="mt-8 p-4 bg-gradient-to-r from-gray-900 to-gray-800 rounded-xl border border-gray-800">
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+              <div>
+                <h3 className="text-lg font-semibold mb-1">Быстрый вход через TON</h3>
+                <p className="text-gray-400 text-sm">Используйте криптокошелек для входа</p>
+              </div>
+              <TonConnectButton onConnect={handleTonConnect} />
+            </div>
           </div>
         </div>
         

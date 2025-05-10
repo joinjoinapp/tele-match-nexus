@@ -6,9 +6,10 @@ import {
   Zap, 
   VideoOff,
   MicOff, 
-  Maximize2,
+  RotateCw,
   Heart,
-  ArrowRight
+  ArrowRight,
+  ArrowLeft
 } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import { useAuth } from '@/hooks/useAuth';
@@ -33,7 +34,7 @@ const EnhancedVideoChat: React.FC = () => {
   const [peerUsername, setPeerUsername] = useState("User123");
   const [peerFollowers, setPeerFollowers] = useState(345);
   const [hasFrontCamera, setHasFrontCamera] = useState(true);
-  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [cameraRotated, setCameraRotated] = useState(false);
   
   // Check for "followed" filter from URL params
   const followedOnly = searchParams.get('filter') === 'followed';
@@ -81,24 +82,13 @@ const EnhancedVideoChat: React.FC = () => {
     setIsVideoOff(!isVideoOff);
   };
   
-  const toggleFullscreen = () => {
-    const element = document.getElementById('remote-video');
-    
-    if (!element) return;
-    
-    if (!document.fullscreenElement) {
-      element.requestFullscreen().catch(err => {
-        toast({
-          title: t('fullscreenError'),
-          description: err.message,
-          variant: "destructive",
-        });
-      });
-      setIsFullscreen(true);
-    } else {
-      document.exitFullscreen();
-      setIsFullscreen(false);
-    }
+  const rotateCamera = () => {
+    // In a real implementation, this would switch between front and back cameras
+    setCameraRotated(!cameraRotated);
+    toast({
+      title: cameraRotated ? "Передняя камера" : "Задняя камера",
+      description: "Камера переключена",
+    });
   };
   
   const handleFollow = () => {
@@ -155,37 +145,54 @@ const EnhancedVideoChat: React.FC = () => {
               className="w-full h-full object-cover"
             />
           )}
-          
-          {/* Peer info overlay */}
-          {isConnected && (
-            <div className="absolute top-4 left-4 bg-black bg-opacity-50 backdrop-blur-sm rounded-lg overflow-hidden">
-              <div className="p-3 flex items-center">
-                <div className="w-10 h-10 rounded-full bg-gray-800 overflow-hidden mr-3">
-                  <img 
-                    src="https://i.pravatar.cc/100"
-                    alt={peerUsername}
-                    className="w-full h-full object-cover"
-                  />
-                </div>
-                <div>
-                  <p className="font-medium">{peerUsername}</p>
-                  <div className="flex items-center text-sm text-gray-300">
-                    <Heart size={12} className="mr-1" />
-                    <span>{peerFollowers} подписчиков</span>
-                  </div>
-                </div>
-              </div>
-              
-              <Button 
-                className={`w-full rounded-none ${isFollowing ? 'bg-gray-700 hover:bg-gray-600' : 'bg-primary'}`}
-                onClick={handleFollow}
-              >
-                {isFollowing ? 'Отписаться' : 'Подписаться'}
-              </Button>
-            </div>
-          )}
         </div>
       </div>
+      
+      {/* Header with back button and match counter */}
+      <div className="absolute top-0 left-0 right-0 p-4 flex justify-between items-center z-20">
+        <Button 
+          variant="ghost" 
+          size="icon"
+          onClick={exitChat}
+          className="rounded-full bg-black/50 hover:bg-black/70 w-10 h-10"
+        >
+          <ArrowLeft className="h-5 w-5 text-white" />
+        </Button>
+
+        <MatchCounter value={matchTokens} />
+        
+        {/* Right side: empty space for balance */}
+        <div className="w-10 h-10"></div>
+      </div>
+      
+      {/* Peer info - moved to right side */}
+      {isConnected && (
+        <div className="absolute top-20 right-4 bg-black bg-opacity-50 backdrop-blur-sm rounded-lg overflow-hidden max-w-[250px]">
+          <div className="p-3 flex items-center">
+            <div className="w-12 h-12 rounded-full bg-gray-800 overflow-hidden mr-3">
+              <img 
+                src="https://i.pravatar.cc/100"
+                alt={peerUsername}
+                className="w-full h-full object-cover"
+              />
+            </div>
+            <div>
+              <p className="font-medium text-white">{peerUsername}</p>
+              <div className="flex items-center text-sm text-gray-300">
+                <Heart size={12} className="mr-1" />
+                <span>{peerFollowers} подписчиков</span>
+              </div>
+            </div>
+          </div>
+          
+          <Button 
+            className={`w-full rounded-none ${isFollowing ? 'bg-gray-700 hover:bg-gray-600' : 'bg-primary'}`}
+            onClick={handleFollow}
+          >
+            {isFollowing ? 'Отписаться' : 'Подписаться'}
+          </Button>
+        </div>
+      )}
       
       {/* Local Video */}
       <div className="absolute bottom-24 right-4 w-[200px] h-[150px] rounded-lg overflow-hidden border-2 border-gray-700 shadow-lg">
@@ -204,11 +211,6 @@ const EnhancedVideoChat: React.FC = () => {
         <div className="absolute top-1 right-1 bg-black bg-opacity-50 px-1 py-0.5 rounded text-white text-xs">
           {t('you')}
         </div>
-      </div>
-      
-      {/* Match counter */}
-      <div className="absolute top-6 left-0 right-0 flex justify-center items-center z-20">
-        <MatchCounter value={matchTokens} />
       </div>
       
       {/* Searching overlay */}
@@ -266,10 +268,9 @@ const EnhancedVideoChat: React.FC = () => {
             variant="ghost" 
             size="icon"
             className="rounded-full bg-gray-800 hover:bg-gray-700 w-12 h-12"
-            onClick={toggleFullscreen}
-            disabled={!isConnected}
+            onClick={rotateCamera}
           >
-            <Maximize2 className="text-white" />
+            <RotateCw className="text-white" />
           </Button>
           
           <Button 
@@ -291,14 +292,6 @@ const EnhancedVideoChat: React.FC = () => {
           </div>
         </div>
       )}
-      
-      {/* Exit button */}
-      <button 
-        onClick={exitChat}
-        className="absolute top-6 left-6 px-4 py-2 bg-black bg-opacity-50 hover:bg-opacity-70 rounded-md text-white z-20"
-      >
-        ← {t('back')}
-      </button>
       
       {/* Boost Modal */}
       <BoostModal 

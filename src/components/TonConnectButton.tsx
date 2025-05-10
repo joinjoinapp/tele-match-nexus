@@ -32,14 +32,15 @@ const TonConnectButton: React.FC<TonConnectButtonProps> = ({ onConnect }) => {
     <Button 
       onClick={handleConnect} 
       disabled={isConnecting}
-      className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center"
+      variant="outline"
+      className="border-gray-700 hover:bg-gray-800 text-white py-3 px-4 rounded-lg flex items-center gap-2 transition-all shadow-lg hover:shadow-cyan-500/20"
     >
       <img 
         src="https://ton.org/download/ton_symbol.svg" 
         alt="TON" 
-        className="w-5 h-5 mr-2" 
+        className="w-5 h-5" 
       />
-      {isConnecting ? 'Подключение...' : 'Войти через TON'}
+      <span>{isConnecting ? 'Подключение...' : 'Войти через TON'}</span>
     </Button>
   );
 };

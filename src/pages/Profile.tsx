@@ -6,6 +6,8 @@ import { Button } from '@/components/ui/button';
 import { useAuth } from '@/hooks/useAuth';
 import UserProfile from '@/components/UserProfile';
 import ProfileSettings from '@/components/ProfileSettings';
+import TonConnectButton from '@/components/TonConnectButton';
+import { ArrowLeft, VideoIcon } from 'lucide-react';
 
 const Profile = () => {
   const navigate = useNavigate();
@@ -38,6 +40,14 @@ const Profile = () => {
     setActiveTab("profile");
   };
 
+  const handleTonConnect = (address: string) => {
+    setWalletAddress(address);
+    toast({
+      title: 'Кошелек подключен',
+      description: `${address} успешно привязан к профилю`,
+    });
+  };
+
   if (!user) {
     navigate('/');
     return null;
@@ -45,16 +55,35 @@ const Profile = () => {
 
   return (
     <div className="min-h-screen bg-black text-white">
-      <div className="container mx-auto px-4 py-16">
-        <div className="flex items-center mb-6">
+      <div className="container mx-auto px-4 py-6">
+        {/* Header with back button */}
+        <div className="flex items-center mb-6 mt-6">
           <Button 
             variant="ghost" 
-            className="mr-4 pl-0"
+            className="mr-4 pl-0 flex items-center gap-2 text-gray-300 hover:text-white"
             onClick={() => navigate('/')}
           >
-            ← Назад
+            <ArrowLeft className="w-5 h-5" />
+            <span>Назад</span>
           </Button>
           <h1 className="text-2xl font-bold">Профиль</h1>
+        </div>
+        
+        {/* Call with followers button - this is now prominently placed at the top */}
+        <div className="mb-6 bg-gradient-to-r from-indigo-600 to-purple-600 rounded-xl p-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-xl font-semibold text-white mb-1">Видеочат с подписками</h3>
+              <p className="text-gray-200 text-sm">Общайтесь только с теми, на кого вы подписаны</p>
+            </div>
+            <Button 
+              className="bg-white text-indigo-700 hover:bg-gray-100 flex items-center gap-2"
+              onClick={() => navigate('/video-chat?filter=followed')}
+            >
+              <VideoIcon className="w-4 h-4" />
+              <span>Начать</span>
+            </Button>
+          </div>
         </div>
         
         <Tabs value={activeTab} onValueChange={setActiveTab}>
@@ -90,15 +119,8 @@ const Profile = () => {
             </div>
             
             <div className="mt-8 bg-gray-900 bg-opacity-80 backdrop-blur-md rounded-lg p-6 border border-gray-800">
-              <div className="flex justify-between items-center mb-4">
-                <h3 className="text-xl font-bold">Мои подписки</h3>
-                <Button 
-                  variant="outline"
-                  className="text-sm h-8"
-                  onClick={() => navigate('/video-chat?filter=followed')}
-                >
-                  Видео с подписками
-                </Button>
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4">
+                <h3 className="text-xl font-bold mb-2 sm:mb-0">Мои подписки</h3>
               </div>
               
               {following.length > 0 ? (
@@ -127,6 +149,31 @@ const Profile = () => {
                 initialGender={gender}
                 onSave={handleSaveSettings}
               />
+              
+              {/* TON wallet connection */}
+              {!walletAddress && (
+                <div className="mt-6 pt-6 border-t border-gray-800">
+                  <h3 className="text-lg font-semibold mb-3">Подключить кошелек TON</h3>
+                  <p className="text-gray-400 mb-4">Подключите кошелек TON чтобы получать и отправлять токены $match</p>
+                  <TonConnectButton onConnect={handleTonConnect} />
+                </div>
+              )}
+              
+              {walletAddress && (
+                <div className="mt-6 pt-6 border-t border-gray-800">
+                  <h3 className="text-lg font-semibold mb-2">Подключенный кошелек</h3>
+                  <div className="p-3 bg-gray-800 rounded-lg flex justify-between items-center">
+                    <span className="font-mono text-sm text-gray-300">{walletAddress}</span>
+                    <Button 
+                      variant="outline" 
+                      size="sm"
+                      onClick={() => setWalletAddress('')}
+                    >
+                      Отключить
+                    </Button>
+                  </div>
+                </div>
+              )}
             </div>
           </TabsContent>
         </Tabs>
