@@ -10,7 +10,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Globe } from 'lucide-react';
+import { Globe, User } from 'lucide-react';
 
 interface HeaderProps {
   isAuthenticated: boolean;
@@ -51,6 +51,14 @@ const Header: React.FC<HeaderProps> = ({ isAuthenticated, onAuthClick }) => {
                 onClick={() => navigate('/video-chat')}
               >
                 {t('startChat')}
+              </Button>
+              <Button
+                variant="ghost"
+                className="hover:bg-gray-800"
+                onClick={() => navigate('/profile')}
+              >
+                <User className="w-5 h-5 mr-1" />
+                {t('profile')}
               </Button>
               <Button
                 variant="outline"
