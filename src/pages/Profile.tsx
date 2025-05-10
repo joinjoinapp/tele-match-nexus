@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from '@/components/ui/button';
@@ -7,8 +7,18 @@ import { useAuth } from '@/hooks/useAuth';
 import UserProfile from '@/components/UserProfile';
 import ProfileSettings from '@/components/ProfileSettings';
 import TonConnectButton from '@/components/TonConnectButton';
-import { ArrowLeft, VideoIcon } from 'lucide-react';
+import { ArrowLeft, VideoIcon, User } from 'lucide-react';
 import { toast } from "@/components/ui/sonner";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Card, CardContent } from "@/components/ui/card";
+
+// Mock data for followed users
+const mockFollowedUsers = [
+  { id: '1', username: 'alice', followers: 230, avatar: 'https://i.pravatar.cc/150?img=1' },
+  { id: '2', username: 'bob', followers: 145, avatar: 'https://i.pravatar.cc/150?img=2' },
+  { id: '3', username: 'charlie', followers: 342, avatar: 'https://i.pravatar.cc/150?img=3' },
+  { id: '4', username: 'dana', followers: 567, avatar: 'https://i.pravatar.cc/150?img=4' },
+];
 
 const Profile = () => {
   const navigate = useNavigate();
@@ -19,9 +29,21 @@ const Profile = () => {
   const [username, setUsername] = useState(user?.email?.split('@')[0] || 'user123');
   const [gender, setGender] = useState<'male' | 'female' | null>(null);
   const [followers, setFollowers] = useState(345);
-  const [following, setFollowing] = useState<string[]>([]);
+  const [following, setFollowing] = useState<any[]>([...mockFollowedUsers]);
   const [walletAddress, setWalletAddress] = useState('');
   const [isFollowing, setIsFollowing] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+
+  // Effect to simulate loading followed users
+  useEffect(() => {
+    setIsLoading(true);
+    // Simulate API call to fetch followed users
+    const timer = setTimeout(() => {
+      setIsLoading(false);
+    }, 1000);
+
+    return () => clearTimeout(timer);
+  }, []);
 
   const handleFollow = () => {
     if (isFollowing) {
@@ -43,9 +65,15 @@ const Profile = () => {
 
   const handleTonConnect = (address: string) => {
     setWalletAddress(address);
-    // Fix: Using the correct toast format for sonner
     toast("Кошелек подключен", {
       description: `${address} успешно привязан к профилю`,
+    });
+  };
+
+  const handleUnfollow = (userId: string) => {
+    setFollowing(prev => prev.filter(user => user.id !== userId));
+    toast("Отписка", {
+      description: "Вы успешно отписались",
     });
   };
 
@@ -58,16 +86,18 @@ const Profile = () => {
     <div className="min-h-screen bg-black text-white">
       <div className="container mx-auto px-4 py-6">
         {/* Header with back button */}
-        <div className="flex items-center mb-6 mt-6">
-          <Button 
-            variant="ghost" 
-            className="mr-4 pl-0 flex items-center gap-2 text-gray-300 hover:text-white"
-            onClick={() => navigate('/')}
-          >
-            <ArrowLeft className="w-5 h-5" />
-            <span>Назад</span>
-          </Button>
-          <h1 className="text-2xl font-bold">Профиль</h1>
+        <div className="flex items-center justify-between mb-6 mt-6">
+          <div className="flex items-center">
+            <Button 
+              variant="ghost" 
+              className="mr-4 pl-0 flex items-center gap-2 text-gray-300 hover:text-white"
+              onClick={() => navigate('/')}
+            >
+              <ArrowLeft className="w-5 h-5" />
+              <span>Назад</span>
+            </Button>
+            <h1 className="text-2xl font-bold">Профиль</h1>
+          </div>
         </div>
         
         {/* Call with followers button - this is now prominently placed at the top */}
@@ -124,13 +154,52 @@ const Profile = () => {
                 <h3 className="text-xl font-bold mb-2 sm:mb-0">Мои подписки</h3>
               </div>
               
-              {following.length > 0 ? (
-                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                  {/* Follow list would go here */}
-                  <div className="text-gray-400">User list would display here</div>
+              {isLoading ? (
+                <div className="flex justify-center py-8">
+                  <div className="w-8 h-8 border-t-2 border-primary border-solid rounded-full animate-spin"></div>
+                </div>
+              ) : following.length > 0 ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                  {following.map(user => (
+                    <Card key={user.id} className="bg-gray-800 border-gray-700">
+                      <CardContent className="p-4">
+                        <div className="flex items-center gap-3 mb-3">
+                          <Avatar>
+                            <AvatarImage src={user.avatar} alt={user.username} />
+                            <AvatarFallback className="bg-gray-700 text-gray-200">
+                              {user.username.charAt(0).toUpperCase()}
+                            </AvatarFallback>
+                          </Avatar>
+                          <div>
+                            <p className="font-medium text-white">{user.username}</p>
+                            <p className="text-xs text-gray-400">{user.followers} подписчиков</p>
+                          </div>
+                        </div>
+                        <div className="flex gap-2">
+                          <Button 
+                            size="sm" 
+                            className="w-full"
+                            onClick={() => navigate(`/video-chat?user=${user.id}`)}
+                          >
+                            <VideoIcon className="w-3 h-3 mr-1" />
+                            Чат
+                          </Button>
+                          <Button 
+                            size="sm" 
+                            variant="outline"
+                            className="w-full border-gray-600"
+                            onClick={() => handleUnfollow(user.id)}
+                          >
+                            Отписаться
+                          </Button>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
                 </div>
               ) : (
                 <div className="text-center py-8 text-gray-400">
+                  <User className="mx-auto h-10 w-10 mb-3 text-gray-500" />
                   <p>У вас пока нет подписок</p>
                   <Button 
                     className="mt-4"
