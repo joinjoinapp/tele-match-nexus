@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import Header from './Header';
 import AuthModal from './AuthModal';
 import { useAuth } from '@/hooks/useAuth';
+import TonConnectButton from './TonConnectButton';
 
 const HomePage: React.FC = () => {
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
@@ -28,6 +29,12 @@ const HomePage: React.FC = () => {
     setIsAuthModalOpen(false);
   };
 
+  const handleTonConnect = (address: string) => {
+    console.log("Connected wallet:", address);
+    // In a real implementation, this would authenticate the user with their TON wallet
+    navigate('/video-chat');
+  };
+
   return (
     <div className="min-h-screen bg-black text-white">
       <Header isAuthenticated={!!user} onAuthClick={handleAuthClick} />
@@ -47,7 +54,7 @@ const HomePage: React.FC = () => {
           <p className="text-xl md:text-2xl text-gray-300 mb-8">
             Общайтесь со случайными людьми через видеочат и зарабатывайте токен $match за каждую секунду общения
           </p>
-          <div className="flex flex-col sm:flex-row justify-center lg:justify-start space-y-4 sm:space-y-0 sm:space-x-4">
+          <div className="flex flex-col sm:flex-row justify-center lg:justify-start space-y-4 sm:space-y-0 sm:space-x-4 mb-4">
             <Button 
               className="bg-primary hover:bg-primary/90 py-6 px-8 text-lg"
               onClick={handleAuthClick}
@@ -61,6 +68,11 @@ const HomePage: React.FC = () => {
             >
               Таблица лидеров
             </Button>
+          </div>
+          
+          {/* TON Connect Button */}
+          <div className="mt-6">
+            <TonConnectButton onConnect={handleTonConnect} />
           </div>
         </div>
         
