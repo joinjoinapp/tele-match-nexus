@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -8,6 +7,7 @@ import UserProfile from '@/components/UserProfile';
 import ProfileSettings from '@/components/ProfileSettings';
 import TonConnectButton from '@/components/TonConnectButton';
 import { ArrowLeft, VideoIcon } from 'lucide-react';
+import { toast } from "@/components/ui/sonner";
 
 const Profile = () => {
   const navigate = useNavigate();
